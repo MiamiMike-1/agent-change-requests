@@ -23,12 +23,12 @@ Requested, approved, built (pull request), live (MCP server version), confirmed 
 | 6 | Clear documentation (get_guide) | feature_request, principal | shipped 1.2.0 | Nov 18 |  | Nov 18 | Nov 19 | Nov 19 | Nov 19 | Nov 21~ | Nov 21~ |
 | 7 | Version notices (whats_new and a release item) | feature_request, principal | shipped 1.2.0 | Nov 18 |  | Nov 18 | Nov 19 | Nov 19 | Nov 19 | Nov 21~ | Nov 21~ |
 | 8 | App refreshes after MCP writes | bug, principal | shipped 1.2.1 | Nov 21 | Nov 21~ | Nov 21 | Nov 21 | Nov 21~ | Nov 21~ |  |  |
-| 9 | Due dates on tasks and checklist items | missing_capability, agent | received | Nov 23 |  |  |  |  |  |  |  |
-| 10 | Deep link URL for every task | missing_capability, agent | received | Nov 23 |  |  |  |  |  |  |  |
-| 11 | A "today" flag that the app and agents both set and read | missing_capability, agent | received | Nov 23 |  |  |  |  |  |  |  |
-| 12 | "Waiting on" field: who, link, and follow-up date | missing_capability, agent | received | Nov 23 |  |  |  |  |  |  |  |
-| 13 | Simpler statuses, with a Waiting tab in the app | feature_request, principal | received | Nov 23 |  |  |  |  |  |  |  |
-| 14 | History log of who changed what, and when | missing_capability, principal | received | Nov 23 |  |  |  |  |  |  |  |
+| 9 | Due dates on tasks and checklist items | missing_capability, agent | planned | Nov 23 | Nov 23 |  |  |  |  |  |  |
+| 10 | Deep link URL for every task | missing_capability, agent | planned | Nov 23 | Nov 23 |  |  |  |  |  |  |
+| 11 | A "today" flag that the app and agents both set and read | missing_capability, agent | planned | Nov 23 | Nov 23 |  |  |  |  |  |  |
+| 12 | "Waiting on" field: who, link, and follow-up date | missing_capability, agent | planned | Nov 23 | Nov 23 |  |  |  |  |  |  |
+| 13 | Simpler statuses, with a Waiting tab in the app | feature_request, principal | planned | Nov 23 | Nov 23 |  |  |  |  |  |  |
+| 14 | History log of who changed what, and when | missing_capability, principal | planned | Nov 23 | Nov 23 |  |  |  |  |  |  |
 
 Dates are US Eastern; ~ marks an approximate time.
 

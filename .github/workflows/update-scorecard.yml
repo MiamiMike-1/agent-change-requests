@@ -1,0 +1,45 @@
+name: Update scorecard
+
+# Runs on a schedule or by hand only. It has no pull request trigger, so code
+# from a fork can never run with these secrets.
+on:
+  schedule:
+    - cron: "17 11 * * *" # daily, 6:17 AM US Eastern (standard time)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-scorecard
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.repository == 'MiamiMike-1/agent-change-requests'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+
+      - name: Refresh the generated block
+        env:
+          SCORECARD_URL: ${{ secrets.SCORECARD_URL }}
+          SCORECARD_TOKEN: ${{ secrets.SCORECARD_TOKEN }}
+        run: python3 -I .github/scripts/update_scorecard.py
+
+      - name: Commit if it changed
+        run: |
+          if git diff --quiet -- scorecard.md; then
+            echo "Scorecard unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scorecard.md
+          git commit -m "Update scorecard from Tasker"
+          git push origin HEAD:main

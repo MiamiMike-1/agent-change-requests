@@ -43,7 +43,7 @@ Most of these rules are adapted from MCP Discussion #2369, credited below.
 
 I've been running an informal version of this loop on Tasker, my own task app, which has its own MCP server. A Claude agent that manages my task list through Tasker asks for changes when it hits a gap. I approve them, Claude Code builds them in the app's repo, and the requesting agent tests the result itself once it's live.
 
-Numbers as of November 22, 2026 (full ledger in [scorecard.md](scorecard.md)):
+The first 8 requests, as of November 22, 2026. Current numbers are in [scorecard.md](scorecard.md), refreshed daily from Tasker's live data.
 
 | Measure | Result |
 |---|---|
@@ -62,7 +62,7 @@ Three lessons from the test changed how I think about the design:
 - **"Shipped" is not "done."** A feature can exist and still not be used, so the scorecard tracks adoption as its own stage.
 - **The return path that worked was pull-based.** The agent learned about changes from the server version shown when it connects, plus a `whats_new` tool it can call. That supports the draft's choice to make the inbox required and push delivery optional.
 
-**Limits of this evidence.** This is one server, one user, one agent, and 8 requests, half of them filed by me. Tasker does not implement the draft: requests were made in conversation, with no structured request object, acceptance tests, or principal-scoped inbox. It shows the loop is workable. It does not show that the protocol works across vendors.
+**Limits of this evidence.** This is one server, one user, one agent, and 8 requests, half of them filed by me. Those 8 were made in conversation, with no structured request object, acceptance tests, or principal-scoped inbox. Tasker has run a prototype of the draft since November 23, 2026. It shows the loop is workable. It does not show that the protocol works across vendors.
 
 ## Prior art
 
@@ -80,7 +80,7 @@ The design also borrows from issue trackers (request and status model), payment 
 | File | What it is |
 |---|---|
 | [SEP-0000-agent-change-requests.md](SEP-0000-agent-change-requests.md) | The full draft: specification, rationale, security, and open questions |
-| [scorecard.md](scorecard.md) | The live ledger from the Tasker test |
+| [scorecard.md](scorecard.md) | The live ledger from the Tasker test, refreshed daily |
 
 ## Next steps
 

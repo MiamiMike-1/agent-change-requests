@@ -23,6 +23,8 @@ def validate(body: str) -> str:
     text = body.strip()
     if not text.startswith(HEADER):
         raise ValueError("response does not start with the scorecard table")
+    if "\n| 1 | " not in text:
+        raise ValueError("response has no ledger rows")
     if "\n- Requests: " not in text or "\n- Live: " not in text:
         raise ValueError("response is missing the running numbers")
     # Titles are HTML-escaped by the server, so a raw "<" means something is wrong.

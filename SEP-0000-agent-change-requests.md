@@ -231,7 +231,12 @@ Agent sessions are short-lived. The durable reply address is the authenticated p
 
 - A server MUST bind each request to the authenticated principal that submitted it, when one exists.
 - `changeRequests/list` MUST return only the caller's own requests. It accepts `status` (array), `updatedSince` (timestamp), and `cursor`.
-- A server MAY announce pending updates by adding `_meta["io.modelcontextprotocol/change-requests"]` with `{ "updates": <count> }` to any response sent to a client that advertised the extension. A client that sees a nonzero count SHOULD call `changeRequests/list`.
+- A server MAY announce pending updates by adding `_meta["io.modelcontextprotocol/change-requests"]` with `{ "updates": <count> }` to any response sent to the principal, whether or not the client advertised the extension. Few clients implement the extension yet, and a server that announced updates only to clients that advertised it would reach almost no one.
+- The notice goes only to the authenticated principal that owns the requests. A server MUST NOT send it to anonymous callers, and MUST NOT send it, or return inbox contents, under a credential that the server knows unrelated users share, since every holder of that credential would appear as the same principal.
+- Clients do not reliably show `_meta` to the model. A server that announces updates SHOULD also end each tool result with one fixed line of text that gives the count and names a way to read the inbox that the client can actually call. A client that does not implement the extension cannot call `changeRequests/list`, so the line MUST name a tool the server exposes for the inbox, for example: "3 of your change requests have an update. Call change_requests_list to see them." A server that exposes no such tool MUST NOT send the line. The line MUST NOT include request titles, messages, or any other request content.
+- A server that sends the line SHOULD let the principal turn it off.
+- A client that sees a nonzero count, in `_meta` or in the text line, SHOULD read the inbox. Reading a request through `changeRequests/list` or `changeRequests/get`, or the tool that serves them, marks its update as seen, so the count falls to zero once the requester has collected it.
+- Answers go to the principal, not to the session that asked. Any session of that principal may collect them, and the first one that reads a request clears its update for all of them. A zero count therefore means only that nothing is unread, not that nothing changed: a session relying on a workaround SHOULD check the request's status rather than wait for the notice.
 - A client SHOULD surface `shipped` results with `workaroundObsolete: true` to the user or record them where a later session will find them.
 
 ### 8. Status events
@@ -252,6 +257,7 @@ Push delivery of status changes uses the Events extension (`io.modelcontextproto
 - A client MUST NOT send a request unless the user or the deploying operator has enabled the extension for that server. Consent MUST be explicit, per server, and revocable at any time. It MUST be separate from any other consent, such as acceptance of terms of service.
 - An operator MAY set a default for a group of users, and MAY set different defaults for different servers.
 - A client MUST NOT advertise the extension or submit requests from an ephemeral or incognito session. No setting overrides this rule.
+- An update notice (Section 7) is not consent. A server cannot tell whether a client has consented or is ephemeral, so the notice may reach a client that has neither. A client that has not enabled the extension for that server, has revoked consent, or is running an ephemeral or incognito session MUST NOT act on the notice, and SHOULD NOT pass the line to the model when it can remove it.
 - A server MUST NOT degrade, limit, or price its service differently for clients that do not advertise the extension or that never submit.
 
 **Content that must not be sent**
@@ -309,6 +315,8 @@ A `shipped` status is the server's claim. Confirmation is the requester's verdic
 
 **Acceptance tests are data.** Letting a requester supply executable code would hand outside parties a path into a vendor's build system. A declarative call plus an expected-result schema captures most of the value: it removes ambiguity about what was wanted and gives both sides a mechanical check. JSON Schema was chosen because tool output schemas already use it.
 
+**Update notices go to every client.** The inbox only helps if the requester knows to look. Limiting the update count to clients that advertise the extension would hide it from nearly every agent in use today, and many clients that do pass `_meta` through never show it to the model. The Tasker test showed the same thing: the return path that worked was text the agent actually read. A count plus one fixed line on every tool result reaches any client, costs a few bytes, and carries no request content. Because it now reaches clients that never opted in, the notice is bounded three ways: it goes only to an authenticated principal that is not a shared credential, it is never consent (Section 9), and its line names a tool the client can call, since a client without the extension cannot call the method.
+
 **Demand is a count.** Exposing who else asked would leak one customer's activity to another. A bare `demand` number tells the requester the request is not alone and tells nothing else.
 
 **The requester decides whether it worked.** A lifecycle that ends at the server's own `shipped` status measures what vendors say. Third parties such as registries can only trust responsiveness figures built from evidence the vendor does not control. Confirmation supplies that evidence, and acceptance tests make it mechanical: the requester re-runs the call it wanted and reports the result. Confirmation is an attribute of a shipped request and not a status, so a missing confirmation never blocks the lifecycle.
@@ -362,7 +370,7 @@ The prototype will use a third-party vendor prefix until the identifier is appro
 ## Open Questions
 
 - Should submission be a protocol method, a reserved tool name, or both? The draft chooses methods plus a client-side tool. A tool-only design would be simpler to adopt and weaker on consent.
-- Is the principal the right inbox key for servers that authenticate with shared API keys, where many unrelated agents appear as one caller?
+- Is the principal the right inbox key for servers that authenticate with shared API keys, where many unrelated agents appear as one caller? Section 7 already keeps the update notice and the inbox away from such credentials; the open question is whether those servers need a finer inbox key.
 - Should `demand` be optional, given that some vendors will treat request volume as commercially sensitive?
 - Does `availability: requester` belong in this extension, or does per-principal rollout imply too much about how servers ship?
 - Should acceptance tests allow a sequence of calls, or stay limited to single calls in version 1?

@@ -43,14 +43,16 @@ Most of these rules are adapted from MCP Discussion #2369, credited below.
 
 I've been running an informal version of this loop on Tasker, my own task app, which has its own MCP server. A Claude agent that manages my task list through Tasker asks for changes when it hits a gap. I approve them, Claude Code builds them in the app's repo, and the requesting agent tests the result itself once it's live.
 
-Numbers as of November 22, 2026 (full ledger in [scorecard.md](scorecard.md)):
+Numbers as of November 23, 2026 (full ledger and running numbers in [scorecard.md](scorecard.md#running-numbers-november-23-2026)):
 
 | Measure | Result |
 |---|---|
-| Requests filed | 8 (4 by the agent, 4 by me, including 1 bug) |
-| Live | 7 of 8 |
-| Median time from request to live | about 20 hours (6 requests with recorded times) |
-| Confirmed by the requester's own behavior test | 3 of 7 live |
+| Requests filed | 14 (8 by the agent, 6 by me, including 1 bug) |
+| Live | 7 of 14 |
+| Median time from request to live | 20.3 hours |
+| Median build time (approved to pull request) | 0.3 hours |
+| Median human time (request to approval, plus pull request to publish) | 20.3 hours |
+| Confirmed by the requester's own behavior test | 3 of 7 live (0 failed) |
 | Adopted (the agent actually uses it or dropped its workaround) | 4 of 7 live |
 | Contract failures caught by the agent's behavior tests | 1 |
 
@@ -62,7 +64,7 @@ Three lessons from the test changed how I think about the design:
 - **"Shipped" is not "done."** A feature can exist and still not be used, so the scorecard tracks adoption as its own stage.
 - **The return path that worked was pull-based.** The agent learned about changes from the server version shown when it connects, plus a `whats_new` tool it can call. That supports the draft's choice to make the inbox required and push delivery optional.
 
-**Limits of this evidence.** This is one server, one user, one agent, and 8 requests, half of them filed by me. Tasker does not implement the draft: requests were made in conversation, with no structured request object, acceptance tests, or principal-scoped inbox. It shows the loop is workable. It does not show that the protocol works across vendors.
+**Limits of this evidence.** This is one server, one user, one agent, and 14 requests, 6 of them filed by me. Tasker has implemented the draft since Tasker MCP 1.3.0 (`com.rocketproforma/change-requests`), but the first 8 requests were made in conversation before that, with no structured request object, acceptance tests, or principal-scoped inbox. It shows the loop is workable. It does not show that the protocol works across vendors.
 
 ## Prior art
 

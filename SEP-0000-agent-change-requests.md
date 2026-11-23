@@ -231,7 +231,9 @@ Agent sessions are short-lived. The durable reply address is the authenticated p
 
 - A server MUST bind each request to the authenticated principal that submitted it, when one exists.
 - `changeRequests/list` MUST return only the caller's own requests. It accepts `status` (array), `updatedSince` (timestamp), and `cursor`.
-- A server MAY announce pending updates by adding `_meta["io.modelcontextprotocol/change-requests"]` with `{ "updates": <count> }` to any response sent to a client that advertised the extension. A client that sees a nonzero count SHOULD call `changeRequests/list`.
+- A server MAY announce pending updates by adding `_meta["io.modelcontextprotocol/change-requests"]` with `{ "updates": <count> }` to any response sent to the principal, whether or not the client advertised the extension. Few clients implement the extension yet, and a server that announced updates only to clients that advertised it would reach almost no one.
+- Clients do not reliably show `_meta` to the model. A server that announces updates SHOULD also end each tool result with one fixed line of text that gives the count and names the inbox, for example: "3 of your change requests have an update. Call changeRequests/list to see them." The line MUST NOT include request titles, messages, or any other request content.
+- A client that sees a nonzero count, in `_meta` or in the text line, SHOULD call `changeRequests/list`. Reading a request through `changeRequests/list` or `changeRequests/get` marks its update as seen, so the count falls to zero once the requester has collected it.
 - A client SHOULD surface `shipped` results with `workaroundObsolete: true` to the user or record them where a later session will find them.
 
 ### 8. Status events
@@ -308,6 +310,8 @@ A `shipped` status is the server's claim. Confirmation is the requester's verdic
 **The principal is the reply address.** Three alternatives were considered. Server-initiated notifications fail because the session that asked no longer exists, and the 2026-07-28 specification removed protocol sessions. Email requires a human in the loop. Webhooks alone exclude every agent that has no public endpoint. Binding requests to the authenticated principal lets any later session collect the answer with no extra infrastructure. Push delivery is delegated to the Events extension, which already defines polling, streaming, and signed webhooks.
 
 **Acceptance tests are data.** Letting a requester supply executable code would hand outside parties a path into a vendor's build system. A declarative call plus an expected-result schema captures most of the value: it removes ambiguity about what was wanted and gives both sides a mechanical check. JSON Schema was chosen because tool output schemas already use it.
+
+**Update notices go to every client.** The inbox only helps if the requester knows to look. Limiting the update count to clients that advertise the extension would hide it from nearly every agent in use today, and many clients that do pass `_meta` through never show it to the model. The Tasker test showed the same thing: the return path that worked was text the agent actually read. A count plus one fixed line on every tool result reaches any client, costs a few bytes, and carries no request content.
 
 **Demand is a count.** Exposing who else asked would leak one customer's activity to another. A bare `demand` number tells the requester the request is not alone and tells nothing else.
 

@@ -111,9 +111,16 @@ A client MUST NOT call the methods below unless the server advertises the extens
     "target": { "type": "tool", "name": "list_invoices" },
     "context": {
       "goal": "Total unpaid invoices for one customer",
-      "workaround": "Paged all 4,200 invoices and filtered client-side"
+      "workaround": "Paged all 4,200 invoices and filtered client-side",
+      "cause": "The tool may predate customer-level access controls"
     },
-    "impact": { "blocked": false, "frequency": "recurring" },
+    "failureMode": "interface_cost",
+    "impact": {
+      "blocked": false,
+      "frequency": "recurring",
+      "severity": "medium",
+      "detectability": "immediate"
+    },
     "acceptanceTests": [
       {
         "description": "Filter by customer returns only that customer's invoices",
@@ -147,8 +154,9 @@ A client MUST NOT call the methods below unless the server advertises the extens
 | `title` | Required | At most 120 characters. |
 | `description` | Required | At most 4,000 characters. Plain text. |
 | `target` | Optional | `type` is `tool`, `resource`, `prompt`, or `server`. `name` is required unless `type` is `server`. |
-| `context` | Optional | `goal`, `workaround`, and `attempts` (at most 5 prior calls with their outcomes). |
-| `impact` | Optional | `blocked` is a boolean. `frequency` is `once` or `recurring`. |
+| `context` | Optional | `goal`, `workaround`, `cause`, and `attempts` (at most 5 prior calls with their outcomes). `cause` is the agent's hypothesis about why the gap exists, at most 500 characters. |
+| `failureMode` | Optional | How the surface failed. One of the base modes below, or a vendor-prefixed mode. |
+| `impact` | Optional | `blocked` is a boolean. `frequency` is `once` or `recurring`. `severity` is `low`, `medium`, or `high`. `detectability` is `immediate`, `eventual`, or `hidden`. |
 | `acceptanceTests` | Optional | At most 10. Allowed only when the server advertises `acceptanceTests`. |
 | `idempotencyKey` | Required | A client-generated unique string. |
 
@@ -174,6 +182,23 @@ Normative requirements:
 - A server MAY merge a request into an existing one. It MUST then set `duplicateOf` to the surviving `requestId` and SHOULD return that request's `demand` count.
 - A server MUST return `ticket` when the caller is anonymous. The ticket is a bearer credential for `changeRequests/get` on that one request.
 - A server MUST reject a request whose `kind` it did not advertise.
+- A server MUST NOT reject a request because of an unrecognized `failureMode`. It SHOULD store the value unchanged.
+- A server and any reader of a request MUST treat `context.cause` as the requester's hypothesis, not a finding, and MUST NOT present it as the established cause.
+
+`kind` says what the requester wants. `failureMode` says how the surface failed, so that the same mechanism can be counted across tools and servers. The base failure modes are:
+
+| Failure mode | Meaning |
+| --- | --- |
+| `capability_missing` | The capability the requester needed does not exist. |
+| `interface_cost` | The capability exists, but its shape (parameters, formats, paging) makes the caller pay for it. |
+| `data_gap` | Documented or expected data is absent, stale, or wrong. |
+| `discoverability` | The capability or state exists, but nothing told the requester where to find it. |
+| `scope_not_honored` | A parameter documented as narrowing the result did not change it. |
+| `silent_failure` | The call reported success, but no work landed or the result reflected an earlier state. |
+
+A vendor-prefixed mode such as `com.example/quota_reset` MAY be used for a mechanism the base list does not cover.
+
+`detectability` follows the detection axis of failure modes and effects analysis (FMEA). `immediate` means the call itself showed the failure. `eventual` means the requester noticed later in the task. `hidden` means only outside evidence revealed it, for example a later read that contradicted a reported success.
 
 ### 4. Acceptance tests
 
@@ -274,6 +299,9 @@ Push delivery of status changes uses the Events extension (`io.modelcontextproto
 **Client-side controls**
 
 - A client SHOULD cap submissions per server per day, and SHOULD tell the user when the cap is reached.
+- A client SHOULD submit a request only when the gap blocked the requester's task, has recurred, or the user asked for the request. A client SHOULD NOT submit a request for a one-time edge case that the requester worked around at little cost.
+- When the server advertises `acceptanceTests`, a client SHOULD attach at least one. A gap the requester cannot express as an expected call and result is usually not ready to file.
+- Before submitting, a client SHOULD check `changeRequests/list` for its own open requests on the same `target`, and SHOULD NOT file a second request for a gap it has already reported.
 - Text supplied by a server, including tool results and status messages, MUST NOT be able to change the client's consent state or redaction rules.
 - A client that exposes submission to a model SHOULD do so as a single tool whose input matches the `changeRequests/submit` parameters. The client, and not the server, writes that tool's description.
 
@@ -317,9 +345,13 @@ A `shipped` status is the server's claim. Confirmation is the requester's verdic
 
 **Update notices go to every client.** The inbox only helps if the requester knows to look. Limiting the update count to clients that advertise the extension would hide it from nearly every agent in use today, and many clients that do pass `_meta` through never show it to the model. The Tasker test showed the same thing: the return path that worked was text the agent actually read. A count plus one fixed line on every tool result reaches any client, costs a few bytes, and carries no request content. Because it now reaches clients that never opted in, the notice is bounded three ways: it goes only to an authenticated principal that is not a shared credential, it is never consent (Section 9), and its line names a tool the client can call, since a client without the extension cannot call the method.
 
+**Failure mode, detectability, and cause come from FMEA practice.** A `kind` alone tells a server what was asked for, not what went wrong, so two requests about the same defect in different tools look unrelated. A small shared set of failure modes makes the mechanism countable across tools and across servers, which is what lets a registry or a vendor see that one kind of failure keeps recurring. Detectability matters because hidden failures cost the most: nothing else catches them, and the requester acted on a false state. The `cause` field is labeled a hypothesis because it is a model's guess, and a guess presented as a diagnosis sends the fix in the wrong direction. These three fields are adapted from an internal multi-agent "friction ledger" [published as a gist](https://gist.github.com/markalosey/8ea04b76024dcb7824558e365b663253), which records severity and detectability on every report, governs failure modes through a reviewed registry, and renders the reporter's cause as a labeled hypothesis. The base list here is deliberately short and open to vendor prefixes, so that adoption does not wait on agreement about a full taxonomy.
+
+**Filing has a bar.** Agents can file at almost no cost, and an unfiltered stream becomes a backlog nobody reads, which costs the server more than it returns. The public friction ledger cited above shows the risk inside a single team: 443 of its 477 reports were still open when it was described. The Tasker test shows the other side: every request waited for a person's approval, and 14 were filed over six days, not hundreds. A rule that a request must have blocked the task or recurred, and should carry an acceptance test, keeps requests to gaps that cost real work and that a server can check.
+
 **Demand is a count.** Exposing who else asked would leak one customer's activity to another. A bare `demand` number tells the requester the request is not alone and tells nothing else.
 
-**The requester decides whether it worked.** A lifecycle that ends at the server's own `shipped` status measures what vendors say. Third parties such as registries can only trust responsiveness figures built from evidence the vendor does not control. Confirmation supplies that evidence, and acceptance tests make it mechanical: the requester re-runs the call it wanted and reports the result. Confirmation is an attribute of a shipped request and not a status, so a missing confirmation never blocks the lifecycle.
+**The requester decides whether it worked.** A lifecycle that ends at the server's own `shipped` status measures what vendors say. Third parties such as registries can only trust responsiveness figures built from evidence the vendor does not control. The same friction ledger records a deployment check that passed 22 of 22 tests against cached, pre-deploy output, which is the server-side view of a fix being wrong in exactly this way. Confirmation supplies that evidence, and acceptance tests make it mechanical: the requester re-runs the call it wanted and reports the result. Confirmation is an attribute of a shipped request and not a status, so a missing confirmation never blocks the lifecycle.
 
 **Fulfillment is out of scope.** Whether a human, the vendor's own agent, or an automated pipeline builds the change is a vendor decision. The extension standardizes the conversation and leaves the engineering process alone. A separate extension could later define contributed implementations, where the requester proposes the change itself. That raises review, licensing, and supply-chain questions that deserve their own proposal.
 
@@ -374,6 +406,7 @@ The prototype will use a third-party vendor prefix until the identifier is appro
 - Should `demand` be optional, given that some vendors will treat request volume as commercially sensitive?
 - Does `availability: requester` belong in this extension, or does per-principal rollout imply too much about how servers ship?
 - Should acceptance tests allow a sequence of calls, or stay limited to single calls in version 1?
+- Should the base failure modes be fixed in this specification, or kept in a separate registry that can grow through review without a new version of the extension?
 - Should the extension define a positive signal ("this worked well"), as at least one vendor tool does today?
 - Should the client record `shipped` results in a standard location, for example alongside AGENTS.md, so that later sessions find them without calling the server?
 - Should the extension define a standard export of aggregate figures (requests, shipped, confirmed, median time to ship), so that registries can publish comparable responsiveness scores?

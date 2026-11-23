@@ -2,7 +2,7 @@
 
 A live test of the agent change request loop on Tasker, my own task app with its own MCP server. The requester is a Claude agent that manages my task list through Tasker. The builder is Claude Code working in the app's repo. I approve each request and merge each change. Times are US Eastern. The test started November 21, 2026, and covers requests back to November 18.
 
-This is an informal test. Tasker does not implement the draft extension: requests were made in conversation, with no structured request object, acceptance tests, or principal-scoped inbox.
+Since Tasker MCP 1.3.0 (November 23, 2026), Tasker implements the draft extension as `com.rocketproforma/change-requests`, and the tables below are generated from its `change_requests_scorecard` tool. The first 8 requests (`crq_seed_01` to `crq_seed_08`) were made in conversation before that, with no structured request object, acceptance tests, or principal-scoped inbox, and were entered afterwards with times recovered from the record; `~` marks the approximate ones.
 
 ## Stages
 
@@ -10,27 +10,41 @@ Requested, approved, built (pull request), live (MCP server version), confirmed 
 
 "Confirmed" means the requesting agent tested the behavior itself, not just that a tool or field exists. "Adopted" means the agent actually uses the change or dropped its workaround.
 
+<!-- scorecard:start -->
 ## Ledger
 
-| # | Request | Origin | Requested | Live | Request to live | Confirmed | Adopted |
-|---|---|---|---|---|---|---|---|
-| 1 | Reference items (keep info and links without counting them as open work) | Agent | Nov 18 | v1.2.0, Nov 19 (see note 1) | ~21 h | Yes | Yes |
-| 2 | Checklists as data | Agent | Nov 18 | v1.2.0, Nov 19 (see note 1) | ~21 h | Partly: tools present, not exercised yet | No |
-| 3 | Sub-task close and AI-answer titles | Agent | Nov 18 | v1.2.0, Nov 19 (see note 1) | ~21 h | Partly: documented, not exercised yet | No |
-| 4 | Repeats and alarms through MCP | Agent | Nov 18 | v1.2.0, Nov 19 | ~20 h | Partly: field present | Yes: a monthly recurring task now uses it |
-| 5 | Email intake | Me | Nov 18 | Not yet: needs my setup | Open | No | No |
-| 6 | Clear documentation (`get_guide`) | Me | Nov 18 | v1.2.0, Nov 19 | ~8 h | Yes | Yes |
-| 7 | Version notices (`whats_new` and a release item) | Me | Nov 18 | v1.2.0, Nov 19 | ~8 h | Yes | Yes |
-| 8 | App refreshes after MCP writes (bug: docs said changes appear immediately, but the agent's behavior test showed a reload was needed) | Me (bug) | Nov 21 | v1.2.1, Nov 21 | Same day, hours not recorded | Not yet re-tested after the fix | No |
+| # | Request | Kind, origin | Status | Requested | Approved | Built | Merged | Published | Live | Confirmed | Adopted |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Reference items | feature_request, agent | shipped 1.1.0 | Nov 18 | Nov 18~ | Nov 18 | Nov 18 | Nov 19~ | Nov 19~ | Nov 21~ | Nov 21~ |
+| 2 | Sub-task close and AI-answer titles | feature_request, agent | shipped 1.1.0 | Nov 18 | Nov 18~ | Nov 18 | Nov 18 | Nov 19~ | Nov 19~ |  |  |
+| 3 | Checklists as data | feature_request, agent | shipped 1.1.0 | Nov 18 | Nov 18~ | Nov 18 | Nov 18 | Nov 19~ | Nov 19~ |  |  |
+| 4 | Email intake | feature_request, principal | building | Nov 18 | Nov 18~ | Nov 18 | Nov 18 |  |  |  |  |
+| 5 | Repeats and alarms through MCP | feature_request, agent | shipped 1.2.0 | Nov 18 | Nov 18~ | Nov 18 | Nov 19 | Nov 19 | Nov 19 |  | Nov 21~ |
+| 6 | Clear documentation (get_guide) | feature_request, principal | shipped 1.2.0 | Nov 18 |  | Nov 18 | Nov 19 | Nov 19 | Nov 19 | Nov 21~ | Nov 21~ |
+| 7 | Version notices (whats_new and a release item) | feature_request, principal | shipped 1.2.0 | Nov 18 |  | Nov 18 | Nov 19 | Nov 19 | Nov 19 | Nov 21~ | Nov 21~ |
+| 8 | App refreshes after MCP writes | bug, principal | shipped 1.2.1 | Nov 21 | Nov 21~ | Nov 21 | Nov 21 | Nov 21~ | Nov 21~ |  |  |
+| 9 | Due dates on tasks and checklist items | missing_capability, agent | received | Nov 23 |  |  |  |  |  |  |  |
+| 10 | Deep link URL for every task | missing_capability, agent | received | Nov 23 |  |  |  |  |  |  |  |
+| 11 | A "today" flag that the app and agents both set and read | missing_capability, agent | received | Nov 23 |  |  |  |  |  |  |  |
+| 12 | "Waiting on" field: who, link, and follow-up date | missing_capability, agent | received | Nov 23 |  |  |  |  |  |  |  |
+| 13 | Simpler statuses, with a Waiting tab in the app | feature_request, principal | received | Nov 23 |  |  |  |  |  |  |  |
+| 14 | History log of who changed what, and when | missing_capability, principal | received | Nov 23 |  |  |  |  |  |  |  |
 
-## Running numbers (November 22, 2026)
+Dates are US Eastern; ~ marks an approximate time.
 
-- Requests: 8 (4 from the agent, 4 from me, 1 of them a bug)
-- Live: 7 of 8
-- Median request to live: about 20 hours, across the 6 requests with recorded times
-- Confirmed by behavior test: 3 of 7 live
-- Adopted: 4 of 7 live
-- Contract failures caught by the agent's behavior tests: 1 (live refresh, request 8)
+## Running numbers (November 23, 2026)
+
+- Requests: 14 (8 agent, 6 principal)
+- Live: 7 of 14
+- Median request to live: 20.3 h
+- Median build time (approved to pull request): 0.3 h
+- Median human time (request to approval, plus pull request to publish): 20.3 h
+- Confirmed fixed: 3 of 7 shipped (0 failed, 4 unconfirmed)
+- Adopted: 4 of 7 shipped
+- Contract failures: 1
+- Picked up by the requester: 7 of 7 shipped
+- Gaps logged: 0, 0 followed by a request within 30 minutes
+<!-- scorecard:end -->
 
 ## Notes
 

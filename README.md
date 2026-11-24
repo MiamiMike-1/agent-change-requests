@@ -84,11 +84,12 @@ The design also borrows from issue trackers (request and status model), payment 
 |---|---|
 | [SEP-0000-agent-change-requests.md](SEP-0000-agent-change-requests.md) | The full draft: specification, rationale, security, and open questions |
 | [scorecard.md](scorecard.md) | The live ledger from the Tasker test |
+| [packages/server](packages/server) | A reusable server implementation in TypeScript: request rules, lifecycle, inbox, update notice, confirmation, scorecard, and MCP tools |
 
 ## Next steps
 
 - Post in MCP Discussion #2369 to introduce this draft and how it relates to that proposal.
-- Build a reference implementation in the official TypeScript SDK: server middleware, client support, and a demo server with a deliberate gap.
+- Use the server package in [packages/server](packages/server) across more than one app, then propose it as a reference implementation in the official TypeScript SDK, with client support and a demo server with a deliberate gap.
 - Find a working group home and a maintainer sponsor. The Triggers & Events Working Group, which owns MCP Events, is one candidate.
 - Invite the vendors above to co-author, since they've already proven the demand.
 
@@ -99,3 +100,7 @@ Open an issue or a discussion in this repo. I'm especially interested in the ope
 ## Author
 
 Mike Lingle ([@miamimike_](https://x.com/miamimike_) on X). I'm an early-stage investor, author, and founder, and I build my own tools with AI agents.
+
+## License
+
+The specification, README, and scorecard are CC0. The code in [packages](packages) is MIT.

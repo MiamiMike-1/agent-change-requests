@@ -117,6 +117,8 @@ The `allow` list keeps Dependabot to this package only. Drop it if you want upda
 2. Merge to `main`, then push a tag named `server-v` plus the version, for example `server-v0.2.0`.
 3. The release workflow runs the tests, builds, and publishes to npm with provenance.
 
+The workflow publishes through npm trusted publishing, so no npm token is stored. Set it up on npmjs.com under the package's **Settings**, **Trusted publishing**, **GitHub Actions**, with this repository and the workflow file `release-server.yml`. For the very first release, before the package exists on npm, add a short-lived granular access token as the repository secret `NPM_TOKEN`, then delete it once trusted publishing is set up.
+
 ## Not in this version
 
 - Protocol methods (`changeRequests/submit` and the rest). The tools cover clients that don't implement the extension, which is nearly all of them today.

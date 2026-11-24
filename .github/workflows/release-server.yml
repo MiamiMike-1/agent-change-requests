@@ -1,6 +1,8 @@
 # Publishes @agent-change-requests/server to npm when a tag like server-v0.1.0 is pushed.
-# Needs an npm organization named agent-change-requests and a repository secret
-# NPM_TOKEN holding an npm automation token that can publish to it.
+# Publishing uses npm trusted publishing (OIDC) once it is set up for the package on
+# npmjs.com. Until then, for the very first release, a repository secret NPM_TOKEN
+# holding a short-lived npm granular access token is used. Delete that secret once
+# trusted publishing is on.
 name: Release server package
 
 on:
@@ -21,6 +23,8 @@ jobs:
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@^11.5.1
       - run: npm ci
       - name: Check the tag matches the package version
         run: |
@@ -32,6 +36,6 @@ jobs:
       - run: npm run typecheck --workspace packages/server
       - run: npm test --workspace packages/server
       - run: npm run build --workspace packages/server
-      - run: npm publish --workspace packages/server --provenance --access public
+      - run: npm publish --workspace packages/server --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

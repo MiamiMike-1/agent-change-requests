@@ -28,6 +28,12 @@ export interface ChangeRequestStore {
   countUnread(principal: string): Promise<number>;
   insertGap(gap: Gap): Promise<void>;
   listGaps(principal: string | null, since?: string): Promise<Gap[]>;
+  /**
+   * Optional. Resolves when the store can be reached and is ready for the calls
+   * above, and rejects otherwise. It must read no records. The health check
+   * uses it; without it, the health check reads one request id that does not exist.
+   */
+  ping?(): Promise<void>;
 }
 
 export const DEFAULT_PAGE_SIZE = 50;

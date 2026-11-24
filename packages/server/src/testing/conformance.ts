@@ -7,6 +7,7 @@
  *   runStoreConformance({ describe, it }, () => new MyStore(freshDb()));
  */
 import assert from "node:assert/strict";
+import { checkHealth } from "../health.js";
 import type { ChangeRequestStore } from "../store.js";
 import type { ChangeRequestRecord } from "../types.js";
 
@@ -147,6 +148,16 @@ export function runStoreConformance(t: TestApi, makeStore: () => ChangeRequestSt
       assert.equal((await store.listGaps("user_a")).length, 1);
       assert.equal((await store.listGaps(null)).length, 2);
       assert.equal((await store.listGaps(null, "2026-01-01T12:00:00.000Z")).length, 1);
+    });
+
+    t.it("answers the health check as reachable, on an empty store and a used one", async () => {
+      const store = await makeStore();
+      const errors: unknown[] = [];
+      const onError = (e: unknown) => void errors.push(e);
+      assert.deepEqual(await checkHealth({ store, onError }), { ok: true, store: "reachable" });
+      await store.insert(sampleRecord());
+      assert.deepEqual(await checkHealth({ store, onError }), { ok: true, store: "reachable" });
+      assert.deepEqual(errors, []);
     });
   });
 }

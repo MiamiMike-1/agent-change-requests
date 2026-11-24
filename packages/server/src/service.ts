@@ -113,7 +113,7 @@ export class ChangeRequestService {
     const params = validateSubmit(input, { kinds: this.kinds, acceptanceTests: this.acceptanceTests });
 
     const existing = await this.store.findByIdempotencyKey(who, params.idempotencyKey);
-    if (existing) return this.submitResult(existing);
+    if (existing) return { ...existing.firstResult };
 
     const now = this.now();
     if (this.dailyCap > 0) {
@@ -131,8 +131,9 @@ export class ChangeRequestService {
     }
 
     const at = now.toISOString();
+    const requestId = this.newId();
     const record: ChangeRequestRecord = {
-      requestId: this.newId(),
+      requestId,
       principal: who,
       idempotencyKey: params.idempotencyKey,
       kind: params.kind,
@@ -147,6 +148,8 @@ export class ChangeRequestService {
       approximate: [],
       unread: false,
       pickedUp: false,
+      firstResult: { requestId, status: "received", duplicateOf: null, demand: 1 },
+      revision: 1,
       createdAt: at,
       updatedAt: at,
     };
@@ -161,11 +164,11 @@ export class ChangeRequestService {
     } catch (error) {
       // A concurrent submit with the same key won the race: return its answer.
       const raced = await this.store.findByIdempotencyKey(who, params.idempotencyKey);
-      if (raced) return this.submitResult(raced);
+      if (raced) return { ...raced.firstResult };
       throw error;
     }
-    await this.emit({ type: "submitted", requestId: record.requestId, principal: who, status: "received", at });
-    return this.submitResult(record);
+    await this.emit({ type: "submitted", requestId, principal: who, status: "received", at });
+    return { ...record.firstResult };
   }
 
   /** Reads one of the caller's own requests and clears its update. */
@@ -187,26 +190,23 @@ export class ChangeRequestService {
   }
 
   async withdraw(principal: string | null | undefined, requestId: string): Promise<StatusObject> {
-    const who = this.requirePrincipal(principal);
-    const record = await this.ownRecord(who, requestId);
-    if (isTerminal(record.status)) {
-      throw new ChangeRequestError("terminal_status", `This request is already ${record.status}.`);
-    }
+    const who = this.requireInbox(principal);
     const at = this.now().toISOString();
-    record.status = "withdrawn";
-    record.updatedAt = at;
-    record.unread = false;
-    await this.store.update(record);
+    const record = await this.mutate(requestId, (r) => {
+      this.assertOwner(who, r);
+      if (isTerminal(r.status)) {
+        throw new ChangeRequestError("terminal_status", `This request is already ${r.status}.`);
+      }
+      r.status = "withdrawn";
+      r.updatedAt = at;
+      r.unread = false;
+    });
     await this.emit({ type: "withdrawn", requestId, principal: who, status: "withdrawn", at });
     return this.toStatus(record);
   }
 
   async confirm(principal: string | null | undefined, input: ConfirmInput): Promise<StatusObject> {
-    const who = this.requirePrincipal(principal);
-    const record = await this.ownRecord(who, input.requestId);
-    if (record.status !== "shipped") {
-      throw new ChangeRequestError("not_shipped", "Only a shipped request can be confirmed.");
-    }
+    const who = this.requireInbox(principal);
     if (input.outcome !== "pass" && input.outcome !== "fail") {
       throw new ChangeRequestError("invalid_params", "outcome must be pass or fail.");
     }
@@ -216,19 +216,24 @@ export class ChangeRequestService {
     if (input.adopted !== undefined && typeof input.adopted !== "boolean") {
       throw new ChangeRequestError("invalid_params", "adopted must be a boolean.");
     }
-    validateConfirmTests(input.tests, record.acceptanceTests);
 
     const at = this.now().toISOString();
-    const confirmation: ChangeRequestRecord["confirmations"][number] = { outcome: input.outcome, confirmedAt: at };
-    if (input.tests) confirmation.tests = input.tests;
-    if (input.note !== undefined) confirmation.note = input.note;
-    if (input.adopted !== undefined) confirmation.adopted = input.adopted;
-    record.confirmations.push(confirmation);
-    if (!record.stages.confirmed) record.stages.confirmed = at;
-    if (input.adopted && !record.stages.adopted) record.stages.adopted = at;
-    record.pickedUp = true;
-    record.updatedAt = at;
-    await this.store.update(record);
+    const record = await this.mutate(input.requestId, (r) => {
+      this.assertOwner(who, r);
+      if (r.status !== "shipped") {
+        throw new ChangeRequestError("not_shipped", "Only a shipped request can be confirmed.");
+      }
+      validateConfirmTests(input.tests, r.acceptanceTests);
+      const confirmation: ChangeRequestRecord["confirmations"][number] = { outcome: input.outcome, confirmedAt: at };
+      if (input.tests) confirmation.tests = input.tests;
+      if (input.note !== undefined) confirmation.note = input.note;
+      if (input.adopted !== undefined) confirmation.adopted = input.adopted;
+      r.confirmations.push(confirmation);
+      if (!r.stages.confirmed) r.stages.confirmed = at;
+      if (input.adopted && !r.stages.adopted) r.stages.adopted = at;
+      r.pickedUp = true;
+      r.updatedAt = at;
+    });
     await this.emit({ type: "confirmed", requestId: record.requestId, principal: who, status: record.status, at });
     return this.toStatus(record);
   }
@@ -250,7 +255,7 @@ export class ChangeRequestService {
 
   /** The caller's own scorecard. Pass null for every principal (builder side). */
   async scorecard(principal: string | null | undefined, options: ScorecardOptions = {}): Promise<Scorecard> {
-    if (principal !== null) this.requirePrincipal(principal);
+    if (principal !== null) this.requireInbox(principal);
     const who = principal ?? null;
     const records: ChangeRequestRecord[] = [];
     let cursor: string | undefined;
@@ -272,14 +277,6 @@ export class ChangeRequestService {
 
   /** Moves a request to a new status. The submitter sees an update the next time it calls in. */
   async transition(requestId: string, input: TransitionInput): Promise<ChangeRequestRecord> {
-    const record = await this.store.get(requestId);
-    if (!record) throw new ChangeRequestError("not_found", "No such request.");
-    if (isTerminal(record.status)) {
-      throw new ChangeRequestError("terminal_status", `This request is already ${record.status}.`);
-    }
-    if (!canTransition(record.status, input.status)) {
-      throw new ChangeRequestError("invalid_transition", `Cannot move from ${record.status} to ${input.status}.`);
-    }
     if (input.message !== undefined && input.message.length > LIMITS.message) {
       throw new ChangeRequestError("invalid_params", `message must be at most ${LIMITS.message} characters.`);
     }
@@ -289,30 +286,48 @@ export class ChangeRequestService {
     if (input.status === "shipped" && !input.resolution) {
       throw new ChangeRequestError("invalid_params", "A shipped request needs a resolution.");
     }
+    if (input.at !== undefined && Number.isNaN(Date.parse(input.at))) {
+      throw new ChangeRequestError("invalid_params", "at must be an ISO 8601 time.");
+    }
 
-    const at = input.at ?? this.now().toISOString();
+    // updatedAt is always the time of this write, so agents polling with updatedSince
+    // see it. `at` only dates the stage, for the scorecard.
+    const now = this.now().toISOString();
+    const stageAt = input.at ?? now;
+
+    let survivorId: string | undefined;
     if (input.status === "duplicate") {
       if (!input.duplicateOf || input.duplicateOf === requestId) {
         throw new ChangeRequestError("invalid_params", "A duplicate needs duplicateOf naming another request.");
       }
-      const survivor = await this.store.get(input.duplicateOf);
-      if (!survivor) throw new ChangeRequestError("not_found", "duplicateOf names no request.");
-      // Demand counts distinct principals, never submissions.
-      for (const p of record.demandFrom) if (!survivor.demandFrom.includes(p)) survivor.demandFrom.push(p);
-      await this.store.update(survivor);
-      record.duplicateOf = input.duplicateOf;
+      survivorId = await this.resolveSurvivor(input.duplicateOf, requestId);
     }
 
-    record.status = input.status;
-    if (input.message !== undefined) record.message = input.message;
-    else delete record.message;
-    if (input.resolution) record.resolution = input.resolution;
-    if (input.version) record.version = input.version;
-    if (input.status === "shipped" && !record.stages.live) record.stages.live = at;
-    record.unread = true;
-    record.updatedAt = at;
-    await this.store.update(record);
-    await this.emit({ type: "status_changed", requestId, principal: record.principal, status: record.status, at });
+    const record = await this.mutate(requestId, (r) => {
+      if (isTerminal(r.status)) {
+        throw new ChangeRequestError("terminal_status", `This request is already ${r.status}.`);
+      }
+      if (!canTransition(r.status, input.status)) {
+        throw new ChangeRequestError("invalid_transition", `Cannot move from ${r.status} to ${input.status}.`);
+      }
+      r.status = input.status;
+      if (input.message !== undefined) r.message = input.message;
+      else delete r.message;
+      if (input.resolution) r.resolution = input.resolution;
+      if (input.version) r.version = input.version;
+      if (survivorId) r.duplicateOf = survivorId;
+      if (input.status === "shipped" && !r.stages.live) r.stages.live = stageAt;
+      r.unread = true;
+      r.updatedAt = now;
+    });
+
+    if (survivorId) {
+      // Demand counts distinct principals, never submissions.
+      await this.mutate(survivorId, (s) => {
+        for (const p of record.demandFrom) if (!s.demandFrom.includes(p)) s.demandFrom.push(p);
+      });
+    }
+    await this.emit({ type: "status_changed", requestId, principal: record.principal, status: record.status, at: now });
     return record;
   }
 
@@ -327,13 +342,12 @@ export class ChangeRequestService {
     at: string,
     options: { approximate?: boolean } = {},
   ): Promise<ChangeRequestRecord> {
-    const record = await this.store.get(requestId);
-    if (!record) throw new ChangeRequestError("not_found", "No such request.");
     if (Number.isNaN(Date.parse(at))) throw new ChangeRequestError("invalid_params", "at must be an ISO 8601 time.");
-    record.stages[stage] = at;
-    record.approximate = record.approximate.filter((s) => s !== stage);
-    if (options.approximate) record.approximate.push(stage);
-    await this.store.update(record);
+    const record = await this.mutate(requestId, (r) => {
+      r.stages[stage] = at;
+      r.approximate = r.approximate.filter((s) => s !== stage);
+      if (options.approximate) r.approximate.push(stage);
+    });
     await this.emit({ type: "stage_recorded", requestId, principal: record.principal, status: record.status, stage, at });
     return record;
   }
@@ -360,29 +374,64 @@ export class ChangeRequestService {
   }
 
   /** Another principal's request reads as not found, so nothing about it leaks. */
+  private assertOwner(principal: string, record: ChangeRequestRecord): void {
+    if (record.principal !== principal) throw new ChangeRequestError("not_found", "No such request.");
+  }
+
   private async ownRecord(principal: string, requestId: string): Promise<ChangeRequestRecord> {
     const record = typeof requestId === "string" ? await this.store.get(requestId) : null;
-    if (!record || record.principal !== principal) throw new ChangeRequestError("not_found", "No such request.");
+    if (!record) throw new ChangeRequestError("not_found", "No such request.");
+    this.assertOwner(principal, record);
     return record;
   }
 
-  private async markSeen(records: ChangeRequestRecord[]): Promise<void> {
-    for (const r of records) {
-      const pickedUp = r.status === "shipped" && !r.pickedUp;
-      if (!r.unread && !pickedUp) continue;
-      r.unread = false;
-      if (pickedUp) r.pickedUp = true;
-      await this.store.update(r);
+  /**
+   * Reads a record, applies a change, and writes it back only if nobody wrote it in
+   * between. On a conflict it reads again and reapplies, so no write is lost.
+   */
+  private async mutate(
+    requestId: string,
+    change: (record: ChangeRequestRecord) => void,
+  ): Promise<ChangeRequestRecord> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const record = typeof requestId === "string" ? await this.store.get(requestId) : null;
+      if (!record) throw new ChangeRequestError("not_found", "No such request.");
+      const expected = record.revision;
+      change(record);
+      record.revision = expected + 1;
+      if (await this.store.update(record, expected)) return record;
     }
+    throw new Error("The request kept changing while it was being updated. Try again.");
   }
 
-  private submitResult(record: ChangeRequestRecord): SubmitResult {
-    return {
-      requestId: record.requestId,
-      status: record.status,
-      duplicateOf: record.duplicateOf ?? null,
-      demand: record.demandFrom.length,
-    };
+  /** Follows duplicateOf to the open (or shipped) request that will carry the demand. */
+  private async resolveSurvivor(startId: string, requestId: string): Promise<string> {
+    let id = startId;
+    for (let hops = 0; hops < 10; hops += 1) {
+      if (id === requestId) throw new ChangeRequestError("invalid_params", "A request cannot be a duplicate of itself.");
+      const survivor = await this.store.get(id);
+      if (!survivor) throw new ChangeRequestError("not_found", "duplicateOf names no request.");
+      if (survivor.status === "duplicate" && survivor.duplicateOf) {
+        id = survivor.duplicateOf;
+        continue;
+      }
+      if (survivor.status === "declined" || survivor.status === "withdrawn") {
+        throw new ChangeRequestError("terminal_status", `duplicateOf names a ${survivor.status} request.`);
+      }
+      return id;
+    }
+    throw new ChangeRequestError("invalid_params", "duplicateOf leads through too many duplicates.");
+  }
+
+  private async markSeen(records: ChangeRequestRecord[]): Promise<void> {
+    for (const seen of records) {
+      if (!seen.unread && !(seen.status === "shipped" && !seen.pickedUp)) continue;
+      const fresh = await this.mutate(seen.requestId, (r) => {
+        r.unread = false;
+        if (r.status === "shipped") r.pickedUp = true;
+      });
+      Object.assign(seen, fresh);
+    }
   }
 
   private toStatus(record: ChangeRequestRecord): StatusObject {

@@ -8,8 +8,12 @@ import type { ChangeRequestRecord, Gap, ListQuery, Page } from "./types.js";
 export interface ChangeRequestStore {
   /** Store a new record. Must fail if (principal, idempotencyKey) already exists. */
   insert(record: ChangeRequestRecord): Promise<void>;
-  /** Replace a stored record by requestId. */
-  update(record: ChangeRequestRecord): Promise<void>;
+  /**
+   * Replace a stored record by requestId, but only if its stored revision still equals
+   * expectedRevision. Return false, and change nothing, when it does not.
+   * The record passed in already carries the new revision.
+   */
+  update(record: ChangeRequestRecord, expectedRevision: number): Promise<boolean>;
   get(requestId: string): Promise<ChangeRequestRecord | null>;
   findByIdempotencyKey(principal: string, idempotencyKey: string): Promise<ChangeRequestRecord | null>;
   /**
@@ -56,9 +60,12 @@ export class MemoryStore implements ChangeRequestStore {
     this.records.set(record.requestId, structuredClone(record));
   }
 
-  async update(record: ChangeRequestRecord): Promise<void> {
-    if (!this.records.has(record.requestId)) throw new Error("requestId not found");
+  async update(record: ChangeRequestRecord, expectedRevision: number): Promise<boolean> {
+    const current = this.records.get(record.requestId);
+    if (!current) throw new Error("requestId not found");
+    if (current.revision !== expectedRevision) return false;
     this.records.set(record.requestId, structuredClone(record));
+    return true;
   }
 
   async get(requestId: string): Promise<ChangeRequestRecord | null> {

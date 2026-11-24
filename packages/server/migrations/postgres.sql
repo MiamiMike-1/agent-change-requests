@@ -10,6 +10,9 @@ create table if not exists acr_change_requests (
   status          text not null,
   about           text not null default 'app' check (about in ('app', 'spec')),
   unread          boolean not null default false,
+  -- Copy of record.revision. Update with "where request_id = $1 and revision = $2"
+  -- and treat zero rows updated as a stale write (return false from update()).
+  revision        integer not null default 1,
   created_at      timestamptz not null,
   updated_at      timestamptz not null,
   -- The full ChangeRequestRecord as JSON. The columns above are copies for querying.

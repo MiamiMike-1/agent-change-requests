@@ -16,8 +16,8 @@ It handles the parts every server needs the same way:
 
 | Piece | What to provide |
 |---|---|
-| Storage | A `ChangeRequestStore`. `MemoryStore` is included for tests. For Postgres or Supabase, apply [`migrations/postgres.sql`](migrations/postgres.sql) and implement the interface against it, then run the conformance suite. |
-| Auth | `getPrincipal(call)`: the user or account the server already authenticates. Return `null` when there is none. Never a session id. |
+| Storage | A `ChangeRequestStore`. `MemoryStore` is included for tests. For Postgres or Supabase, apply [`migrations/postgres.sql`](migrations/postgres.sql) and implement the interface against it, then run the conformance suite. `update()` must write only when the stored `revision` matches, so two writers never overwrite each other. |
+| Auth | `getPrincipal(call)`: the user or account the server already authenticates. Return `null` when there is none. Never a session id, and never an OAuth client id, which every user of that client shares. |
 | Notify | `onEvent(event)`: called on every submit, status change, stage, confirmation, and withdrawal. Use it to tell whoever builds changes, or to publish MCP Events. |
 | Build side | Call `transition()` when a request is triaged, planned, built, shipped, or declined, and `recordStage()` when it is approved, gets a pull request, merges, publishes, and goes live. A CI or release script is the natural place. |
 | Settings | `appName`, `extensionId` (a vendor prefix such as `com.example/change-requests` until the identifier is approved), accepted `kinds`, and `dailyCap`. |
@@ -27,7 +27,11 @@ It handles the parts every server needs the same way:
 ```ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ChangeRequestService, MemoryStore } from "@agent-change-requests/server";
-import { registerChangeRequestTools, withUpdateNotice } from "@agent-change-requests/server/mcp";
+import {
+  registerChangeRequestTools,
+  withUpdateNotice,
+  type McpAdapterOptions,
+} from "@agent-change-requests/server/mcp";
 
 const service = new ChangeRequestService({
   store: new MemoryStore(),
@@ -35,11 +39,16 @@ const service = new ChangeRequestService({
 });
 
 const server = new McpServer({ name: "my-app", version: "1.4.0" });
-const options = {
+const options: McpAdapterOptions = {
   service,
   appName: "My App",
   extensionId: "com.example/change-requests",
-  getPrincipal: (call) => call.authInfo?.clientId ?? null,
+  // The signed-in user your auth layer puts on the request. Not authInfo.clientId,
+  // which every user of the same OAuth client shares.
+  getPrincipal: (call) => {
+    const userId = call.authInfo?.extra?.userId;
+    return typeof userId === "string" ? userId : null;
+  },
 };
 
 registerChangeRequestTools(server, options);

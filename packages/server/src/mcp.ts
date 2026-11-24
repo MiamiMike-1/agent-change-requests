@@ -214,7 +214,7 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
     {
       description: "Withdraw a request you no longer need. Only works before it reaches a final status (shipped, declined, duplicate, or withdrawn).",
       inputSchema: { requestId: z.string().describe("The requestId that change_requests_submit returned.") },
-      annotations: { destructiveHint: false, idempotentHint: false },
+      annotations: { destructiveHint: true, idempotentHint: false },
     },
     async (args, extra) => run(extra, async (principal) => ok({ ...(await service.withdraw(principal, args.requestId)) })),
   );

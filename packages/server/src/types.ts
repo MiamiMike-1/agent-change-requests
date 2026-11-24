@@ -155,6 +155,10 @@ export interface ChangeRequestRecord {
   unread: boolean;
   /** True once the submitter has read the request after it shipped. */
   pickedUp: boolean;
+  /** What submit first returned, so a repeated idempotency key gets the same answer. */
+  firstResult: SubmitResult;
+  /** Bumped on every write. Stores use it to refuse a write based on a stale read. */
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }

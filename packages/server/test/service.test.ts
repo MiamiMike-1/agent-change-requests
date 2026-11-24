@@ -219,3 +219,82 @@ describe("recordStage", () => {
     expect(await service.pendingUpdates("user_a")).toBe(0);
   });
 });
+
+describe("concurrency and edge cases", () => {
+  it("returns the first answer for a repeated key even after the request moves on", async () => {
+    const { service } = makeService();
+    const first = await service.submit("user_a", request({ idempotencyKey: "k" }));
+    await service.transition(first.requestId, { status: "triaged" });
+    expect(await service.submit("user_a", request({ idempotencyKey: "k" }))).toEqual(first);
+  });
+
+  it("keeps a status change made between another writer's read and write", async () => {
+    const { service, store } = makeService();
+    const { requestId } = await service.submit("user_a", request());
+    await service.transition(requestId, { status: "shipped", resolution: shippedResolution });
+    // A stale copy, read before the update was seen, cannot overwrite the newer record.
+    const stale = await store.get(requestId);
+    await service.list("user_a", {});
+    expect(await store.update({ ...stale!, unread: true, revision: stale!.revision + 1 }, stale!.revision)).toBe(false);
+    const after = await store.get(requestId);
+    expect(after?.unread).toBe(false);
+    expect(after?.pickedUp).toBe(true);
+    expect(after?.status).toBe("shipped");
+  });
+
+  it("sets updatedAt to now even when a stage is back-dated", async () => {
+    const { service, store, advance, nowIso } = makeService();
+    const { requestId } = await service.submit("user_a", request());
+    advance(60_000);
+    await service.transition(requestId, {
+      status: "shipped",
+      resolution: shippedResolution,
+      at: "2026-01-01T00:00:00.000Z",
+    });
+    const record = await store.get(requestId);
+    expect(record?.updatedAt).toBe(nowIso());
+    expect(record?.stages.live).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("refuses a transition time that is not a date", async () => {
+    const { service } = makeService();
+    const { requestId } = await service.submit("user_a", request());
+    expect(await reason(service.transition(requestId, { status: "triaged", at: "soon" }))).toBe("invalid_params");
+  });
+
+  it("gives a shared credential no scorecard, withdraw, or confirm", async () => {
+    const { service } = makeService({ isSharedCredential: (p) => p === "shared" });
+    const { requestId } = await service.submit("shared", request());
+    expect(await reason(service.scorecard("shared"))).toBe("shared_credential");
+    expect(await reason(service.withdraw("shared", requestId))).toBe("shared_credential");
+    expect(await reason(service.confirm("shared", { requestId, outcome: "pass" }))).toBe("shared_credential");
+  });
+
+  it("follows a duplicate chain to the open request and refuses a closed one", async () => {
+    const { service, store } = makeService();
+    const a = await service.submit("user_a", request());
+    const b = await service.submit("user_b", request());
+    const c = await service.submit("user_c", request());
+    await service.transition(b.requestId, { status: "duplicate", duplicateOf: a.requestId });
+    await service.transition(c.requestId, { status: "duplicate", duplicateOf: b.requestId });
+    expect((await store.get(c.requestId))?.duplicateOf).toBe(a.requestId);
+    expect((await store.get(a.requestId))?.demandFrom).toEqual(["user_a", "user_b", "user_c"]);
+
+    const d = await service.submit("user_d", request());
+    const e = await service.submit("user_e", request());
+    await service.transition(d.requestId, { status: "declined", message: "Out of scope." });
+    expect(await reason(service.transition(e.requestId, { status: "duplicate", duplicateOf: d.requestId }))).toBe(
+      "terminal_status",
+    );
+  });
+
+  it("only marks a received request as a duplicate", async () => {
+    const { service } = makeService();
+    const a = await service.submit("user_a", request());
+    const b = await service.submit("user_b", request());
+    await service.transition(b.requestId, { status: "triaged" });
+    expect(await reason(service.transition(b.requestId, { status: "duplicate", duplicateOf: a.requestId }))).toBe(
+      "invalid_transition",
+    );
+  });
+});

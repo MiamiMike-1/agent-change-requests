@@ -33,6 +33,13 @@ export function sampleRecord(overrides: Partial<ChangeRequestRecord> = {}): Chan
     approximate: [],
     unread: false,
     pickedUp: false,
+    firstResult: {
+      requestId: overrides.requestId ?? "crq_sample",
+      status: "received",
+      duplicateOf: null,
+      demand: 1,
+    },
+    revision: 1,
     createdAt: at,
     updatedAt: at,
     ...overrides,
@@ -66,12 +73,21 @@ export function runStoreConformance(t: TestApi, makeStore: () => ChangeRequestSt
       assert.equal((await store.findByIdempotencyKey("user_b", "key-1"))?.requestId, "crq_b");
     });
 
-    t.it("updates a record in place", async () => {
+    t.it("updates a record in place when the revision matches", async () => {
       const store = await makeStore();
       await store.insert(sampleRecord());
-      const changed = sampleRecord({ status: "shipped", unread: true, updatedAt: "2026-01-06T00:00:00.000Z" });
-      await store.update(changed);
+      const changed = sampleRecord({ status: "shipped", unread: true, revision: 2, updatedAt: "2026-01-06T00:00:00.000Z" });
+      assert.equal(await store.update(changed, 1), true);
       assert.deepEqual(await store.get("crq_sample"), changed);
+    });
+
+    t.it("refuses an update based on a stale read", async () => {
+      const store = await makeStore();
+      await store.insert(sampleRecord());
+      assert.equal(await store.update(sampleRecord({ status: "shipped", revision: 2 }), 1), true);
+      // A writer that read revision 1 must not overwrite the newer record.
+      assert.equal(await store.update(sampleRecord({ status: "withdrawn", revision: 2 }), 1), false);
+      assert.equal((await store.get("crq_sample"))?.status, "shipped");
     });
 
     t.it("lists one principal's records newest first, with filters and pages", async () => {

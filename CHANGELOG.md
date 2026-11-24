@@ -1,5 +1,10 @@
 # Changelog
 
+## Releases (November 24, 2026)
+
+- `@agent-change-requests/server` is set up to publish to npm from a `server-v*` tag, with tests and provenance. Apps install it with `npm install` and can get update pull requests from Dependabot.
+- Tests, typecheck, and build now run on every pull request.
+
 ## Spec draft: what's new (November 24, 2026)
 
 - New Section 12: a changes feed (`changeRequests/changes`) so the people who build on a server hear about every shipped change, not only the ones they requested. Entries carry a version, type, `breaking` flag, plain summary, and a `removeAfter` date for deprecations.

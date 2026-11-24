@@ -1,5 +1,10 @@
 # Changelog
 
+## Releases (November 24, 2026)
+
+- `@agent-change-requests/server` is set up to publish to npm from a `server-v*` tag, with tests and provenance. Apps install it with `npm install` and can get update pull requests from Dependabot.
+- Tests, typecheck, and build now run on every pull request.
+
 ## Server package 0.1.0 (November 24, 2026)
 
 First version of `@agent-change-requests/server` in `packages/server`.

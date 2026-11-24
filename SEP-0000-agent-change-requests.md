@@ -84,6 +84,8 @@ A client that supports the extension advertises it in `_meta["io.modelcontextpro
 | `events` | boolean, default false | The server publishes status changes as an event type through the Events extension (SEP-3415). |
 | `anonymous` | boolean, default false | The server accepts requests without an authenticated principal. |
 | `policyUri` | string, optional | A human-readable page describing how requests are used and retained. |
+| `changelogUri` | string, optional | A human-readable page listing the server's shipped changes. See Section 12. |
+| `changes` | boolean, default false | The server answers `changeRequests/changes` (Section 12). |
 
 A client MUST NOT call the methods below unless the server advertises the extension.
 
@@ -96,6 +98,7 @@ A client MUST NOT call the methods below unless the server advertises the extens
 | `changeRequests/list` | Read the caller's requests, filtered by status or time. This is the inbox. |
 | `changeRequests/withdraw` | Withdraw a request the caller no longer needs. |
 | `changeRequests/confirm` | Report whether a shipped change satisfied the request. |
+| `changeRequests/changes` | Read what the server has shipped since a given version or time, whoever asked for it. |
 
 ### 3. Submitting a request
 
@@ -335,11 +338,63 @@ A `shipped` status is the server's claim. Confirmation is the requester's verdic
 - A client that submitted acceptance tests SHOULD re-run them against the server after a `shipped` status and confirm with the per-test outcomes. The client makes those calls itself, under its own authorization.
 - A server that publishes or exports responsiveness figures MUST count a request as fixed only when its latest confirmation is `pass`, and MUST report unconfirmed shipped requests separately.
 
+### 12. What's new
+
+The inbox tells a requester about the changes it asked for. The people who build on a server also need to hear about the changes they did not ask for: new tools, changed behavior, deprecations, and removals. Today they learn from a changelog page, if they find it, and their agents learn when a call starts failing.
+
+**The changes feed**
+
+`changeRequests/changes` takes `sinceVersion` (string) or `since` (timestamp), and `cursor`. It returns the server's `currentVersion` and the changes shipped after the given point, newest first:
+
+```json
+{
+  "currentVersion": "1.7.0",
+  "changes": [
+    {
+      "version": "1.7.0",
+      "publishedAt": "2026-11-24T15:00:00Z",
+      "type": "added",
+      "breaking": false,
+      "summary": "list_invoices can now filter by customer.",
+      "changed": [{ "type": "tool", "name": "list_invoices" }],
+      "changelogUri": "https://example.com/changelog#1.7.0"
+    },
+    {
+      "version": "1.7.0",
+      "publishedAt": "2026-11-24T15:00:00Z",
+      "type": "deprecated",
+      "breaking": false,
+      "summary": "export_csv is deprecated. Use export_report with format csv.",
+      "changed": [{ "type": "tool", "name": "export_csv" }],
+      "removeAfter": "2027-02-01"
+    }
+  ]
+}
+```
+
+- `type` is one of `added`, `changed`, `deprecated`, `removed`, or `fixed`.
+- `breaking` MUST be `true` when a call that worked before the change can fail or return a different shape after it. A `removed` entry is always breaking.
+- A `deprecated` entry SHOULD carry `removeAfter`, the earliest date the server may remove the target.
+- `summary` is at most 500 characters, written for a person who builds on the server, not for the server's own team.
+- `changeRequestIds` MAY list the caller's own requests that the change resolved. It MUST NOT name another principal's requests or reveal their content or demand.
+- The feed MUST list only changes available to the caller: everything with `availability: all`, and changes released to that caller alone. A server MAY omit internal changes that no caller can observe.
+- The method does not require an authenticated principal, and the server MAY answer it for callers that never submitted a request.
+- A server that sets `changes: true` SHOULD also set `changelogUri`, so that people without an agent can read the same list.
+
+**Reaching people**
+
+- A server MAY announce changes the caller has not read by adding `{ "changes": <count> }` to the same `_meta` key as the update notice (Section 7). It SHOULD count only `breaking` and `deprecated` entries, so that routine additions do not become noise.
+- A server that announces changes in a tool result's text SHOULD use one fixed line, for example: "2 changes may affect your use of this server. Call whats_new to see them." The line follows the rules for the update notice in Section 7: it names a tool the client can call, carries no change content, and the principal can turn it off.
+- A client SHOULD surface `breaking` and `deprecated` entries that affect targets it calls to the user, with the summary and any `removeAfter` date, and SHOULD record them where a later session will find them. A client SHOULD NOT interrupt the user for `added` or `fixed` entries unless the user asked to hear about them.
+- A client that exposes the feed to a model SHOULD do so as one tool, for example `whats_new`, whose input matches the method's parameters.
+
 ## Rationale
 
 **Protocol methods, with a tool as the model-facing surface.** Today's implementations are plain tools, which need no client changes. Tools alone cannot carry consent, redaction, or an inbox, because those belong to the client and not the model. The extension therefore defines methods, and Section 9 tells clients to expose submission to the model as one tool. Clients gain a single control point, and models keep the calling pattern they already use.
 
 **The principal is the reply address.** Three alternatives were considered. Server-initiated notifications fail because the session that asked no longer exists, and the 2026-07-28 specification removed protocol sessions. Email requires a human in the loop. Webhooks alone exclude every agent that has no public endpoint. Binding requests to the authenticated principal lets any later session collect the answer with no extra infrastructure. Push delivery is delegated to the Events extension, which already defines polling, streaming, and signed webhooks.
+
+**What's new is part of the loop.** A change request ends when the fix ships, but the people building on a server need to plan for every change, including ones they never asked for. Putting a version-keyed feed beside the inbox lets the same agent that files requests also tell its user what changed and what will break, with no extra integration. The feed reuses the notice pattern from Section 7 and is limited to breaking changes and deprecations by default, because a line on every addition would train readers to ignore it.
 
 **Acceptance tests are data.** Letting a requester supply executable code would hand outside parties a path into a vendor's build system. A declarative call plus an expected-result schema captures most of the value: it removes ambiguity about what was wanted and gives both sides a mechanical check. JSON Schema was chosen because tool output schemas already use it.
 
@@ -409,5 +464,7 @@ The prototype will use a third-party vendor prefix until the identifier is appro
 - Should the base failure modes be fixed in this specification, or kept in a separate registry that can grow through review without a new version of the extension?
 - Should the extension define a positive signal ("this worked well"), as at least one vendor tool does today?
 - Should the client record `shipped` results in a standard location, for example alongside AGENTS.md, so that later sessions find them without calling the server?
+- Should the changes feed (Section 12) live in this extension, or become its own small extension that any server can adopt without supporting change requests?
+- Should a change entry say how to migrate, for example by naming the replacement tool in a structured field, rather than only in `summary`?
 - Should the extension define a standard export of aggregate figures (requests, shipped, confirmed, median time to ship), so that registries can publish comparable responsiveness scores?
 - Should this extension and the Discussion #2369 proposal merge, with anonymous session observations and identified requests as two modes of one `feedback` capability? This draft uses its own namespace so that either outcome stays open.

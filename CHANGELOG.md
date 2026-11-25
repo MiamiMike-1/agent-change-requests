@@ -13,13 +13,20 @@ The last two protocol pieces the SEP's Reference Implementation section listed a
 - With `legacyTools: false` the notice is sent as `_meta` counts only, since there is no tool the lines could name (SEP section 7).
 - New exports: `applyNotices`, `changesNoticeLine`, `noticeMeta`, `compareVersions`, `ANONYMOUS_PRINCIPAL`, `isChangeFeedStore`, `validateChange`.
 
-**Client**
+**Client package 0.3.0**
 
 - New `ChangesFeed`: reads the feed from the version the client last saw, records breaking and deprecated entries about the targets it uses in a ledger that outlives the session, calls `onChange` for each, and gives the model one `whats_new` tool. `changesCount()` reads the count from `_meta` or the text line.
+- `modelContent()` and `inspect()` now also carry the changes line, after the update line, for hosts that show the model structured content: the server's own line, or one built from `_meta.changes` naming `whatsNewToolName` or the server's `whats_new`. New `changesNoticeLine()`; `inspect()` returns `changes` and `changesNotice`.
+- Anonymous tickets: `submit()` keeps a returned ticket in the ledger, `get()` passes it, and the new `checkTickets()` reads open anonymous requests by ticket and reports shipped ones to `onShipped`.
 
 **Demo**
 
 - The release script publishes the 1.1.0 fix to the changes feed, and session 2 finds it there with its own request id.
+
+## Client 0.2.0 (November 25, 2026)
+
+- The client now carries the update notice for hosts that show the model a tool's `structuredContent` in place of its text, as SEP section 7 asks. `inspect()` returns `notice` and `modelContent`, and the new `noticeLine()` and `modelContent()` work without reading the inbox. The line is the server's own when present, or one built from the `_meta` count that names an inbox tool the model can call (`inboxToolName`, or the server's `change_requests_list`). It is withheld without consent or in an ephemeral session.
+- New export `updateNoticeLine(count, tool)`.
 
 ## Reference implementation (November 25, 2026)
 

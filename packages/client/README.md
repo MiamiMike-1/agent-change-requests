@@ -52,11 +52,48 @@ const { result, inbox } = await changeRequests.inspect(raw);
 // inbox?.shipped lists requests that shipped with workaroundObsolete: true
 ```
 
+### Hosts that show the model structured content
+
+Some hosts show the model a tool's `structuredContent` in place of its text, which drops the server's update notice line. SEP section 7 makes carrying the notice the client's job in that case. Show the model `modelContent` instead of building the text yourself:
+
+```ts
+const { modelContent } = await changeRequests.inspect(raw);
+// [{ type: "text", text: "<structuredContent as JSON>" },
+//  { type: "text", text: "Note from Invoices: 1 of your change requests has an update. Call change_requests_list to see them." }]
+```
+
+`modelContent(result)` and `noticeLine(result)` do the same without reading the inbox. The line is the server's own when the text carries one. Otherwise the client builds the same fixed line from the `_meta` count, naming `inboxToolName` if you set it, or the server's `change_requests_list` if the server lists it, and no line at all when the model has no inbox tool to call. The line never carries request titles or other request content. Without consent, or in an ephemeral session, there is no line (SEP section 9).
+
+The changes line from SEP section 12 ("N changes may affect your use of this server. Call whats_new to see them.") is carried the same way, after the update line: the server's own line, or one built from `_meta.changes` naming `whatsNewToolName` or the server's `whats_new`. `changesNoticeLine(result)` returns it alone, and `inspect()` returns it as `changesNotice` with the count as `changes`.
+
 After a request ships:
 
 ```ts
 await changeRequests.retestAndConfirm(requestId); // re-runs its tests, confirms pass or fail
 ```
+
+## What's new: the changes feed
+
+When the server advertises `changes: true`, `ChangesFeed` reads `changeRequests/changes` from the version the client last saw:
+
+```ts
+import { ChangesFeed, FileChangesLedger } from "@agent-change-requests/client";
+
+const feed = new ChangesFeed(client, {
+  extensionId: "com.example/change-requests",
+  ledger: new FileChangesLedger(".agent/invoices-changes.json"),
+  targets: ["list_invoices"],                 // only surface entries about tools you use
+  onChange: (entry) => tellTheUser(entry),    // breaking and deprecated entries, once each
+});
+await feed.inspect(toolResult);               // checks when a result announces unread changes
+const { notable } = await feed.check();       // or check yourself
+```
+
+Additions and fixes never reach `onChange`, so they don't interrupt. `feed.notices()` lists what was recorded for a later session, and `feed.tool()` / `feed.callTool()` give the model one `whats_new` tool. Reading the feed sends nothing about the user, so it works without submission consent; the extension is advertised on the call only with consent.
+
+## Anonymous requests
+
+Against a server with `anonymous: true` and no signed-in principal, `submit()` gets a ticket back and keeps it in the ledger. `get()` passes it, so the duplicate check works, and `checkTickets()` reads each open anonymous request by its ticket, since there is no inbox and no notice. Shipped requests go to `onShipped` as usual. The ticket is a credential: it stays in the ledger and is never shown to the model.
 
 ## The ledger
 
@@ -70,8 +107,7 @@ It is a safety net, not a guarantee. When the client cannot verify that a reques
 
 ## Not in this version
 
-- Anonymous tickets. Servers built on the matching server package do not accept anonymous requests.
-- The changes feed (`changeRequests/changes`) and Events subscriptions. The inbox covers the return path; push delivery comes with an Events client.
+- Events subscriptions. The inbox covers the return path; push delivery comes with an Events client.
 - Per-request `_meta` advertisement on calls the app makes itself. The client advertises at `initialize`, which is what SDK 1.x servers read, and adds the per-request form on its own `changeRequests/*` calls.
 
 ## Releasing (maintainers)

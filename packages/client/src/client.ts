@@ -13,6 +13,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ClientCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { ResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { runAcceptanceTest } from "./acceptance.js";
+import { CHANGES_NOTICE_LINE } from "./changes.js";
 import { MemoryLedger, type Ledger, type LedgerData, type LedgerEntry } from "./ledger.js";
 import { redactSubmission, type RedactOptions, type RedactionFinding } from "./redact.js";
 import {
@@ -55,6 +56,17 @@ export interface ChangeRequestsClientOptions extends ConsentOptions {
   onShipped?: (status: StatusObject, entry: LedgerEntry) => void | Promise<void>;
   /** Name of the model-facing submission tool. Default file_change_request. */
   toolName?: string;
+  /**
+   * The inbox tool a client-built notice line names (SEP section 7). It must be a tool the
+   * model can call. Default: the server's change_requests_list, used only when the server
+   * lists it. Set it when the host gives the model its own inbox tool.
+   */
+  inboxToolName?: string;
+  /**
+   * The changes tool a client-built changes line names (SEP section 12). Default: the
+   * server's whats_new, used only when the server lists it.
+   */
+  whatsNewToolName?: string;
   now?: () => Date;
 }
 
@@ -77,10 +89,68 @@ export interface Inspection<R> {
   result: R;
   /** Present when the client read its inbox because of the notice. */
   inbox?: InboxCheck;
+  /** The notice line the model should see, or null (SEP section 7). */
+  notice: string | null;
+  /** The unread changes count the server announced, 0 when none (SEP section 12). */
+  changes: number;
+  /** The changes line the model should see, or null (SEP section 12). */
+  changesNotice: string | null;
+  /** What to show the model for this result. See ChangeRequestsClient.modelContent(). */
+  modelContent: { type: "text"; text: string }[];
+}
+
+/** A tool result as a client receives it. */
+export interface ToolResultLike {
+  content?: unknown[];
+  structuredContent?: unknown;
+  _meta?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 /** The text line servers add while updates wait. Matches any wording that carries the count. */
 const NOTICE_LINE = /\b(\d+) of your change requests (?:has|have) an update\b/;
+
+/** The server's default inbox tool (SEP section 7 example). */
+const DEFAULT_INBOX_TOOL = "change_requests_list";
+
+/** The fixed line a client adds from the _meta count. It carries no request content. */
+export function updateNoticeLine(count: number, inboxTool: string): string {
+  const verb = count === 1 ? "has" : "have";
+  return `${count} of your change requests ${verb} an update. Call ${inboxTool} to see them.`;
+}
+
+/** The server's default changes tool (SEP section 12 example). */
+const DEFAULT_CHANGES_TOOL = "whats_new";
+
+/** The fixed changes line a client adds from the _meta count. It carries no change content. */
+export function changesNoticeLine(count: number, changesTool: string): string {
+  const noun = count === 1 ? "change" : "changes";
+  return `${count} ${noun} may affect your use of this server. Call ${changesTool} to see them.`;
+}
+
+function isTextMatching(c: unknown, pattern: RegExp): boolean {
+  const text = (c as { type?: string; text?: string }).text;
+  return (c as { type?: string }).type === "text" && typeof text === "string" && pattern.test(text);
+}
+
+function isUpdateBlock(c: unknown): boolean {
+  return isTextMatching(c, NOTICE_LINE);
+}
+
+function isChangesBlock(c: unknown): boolean {
+  return isTextMatching(c, CHANGES_NOTICE_LINE);
+}
+
+/** Either notice line: the update line (section 7) or the changes line (section 12). */
+function isNoticeBlock(c: unknown): boolean {
+  return isUpdateBlock(c) || isChangesBlock(c);
+}
+
+function textBlocks(content: unknown[]): { type: "text"; text: string }[] {
+  return content
+    .filter((c) => (c as { type?: string }).type === "text" && typeof (c as { text?: unknown }).text === "string")
+    .map((c) => ({ type: "text" as const, text: (c as { text: string }).text }));
+}
 
 /** The capabilities to pass to new Client(): the extension is advertised only when allowed. */
 export function changeRequestsCapabilities(
@@ -113,6 +183,7 @@ export class ChangeRequestsClient {
   private readonly options: ChangeRequestsClientOptions;
   private readonly ledger: Ledger;
   private readonly now: () => Date;
+  private serverToolNames: Promise<Set<string>> | null = null;
 
   constructor(client: Client, options: ChangeRequestsClientOptions) {
     this.client = client;
@@ -279,16 +350,43 @@ export class ChangeRequestsClient {
     if (params.target) entry.target = params.target;
     // Keep the tests as sent, so the client re-runs exactly what the server stored.
     if (params.acceptanceTests) entry.acceptanceTests = params.acceptanceTests;
+    // Anonymous submissions: the ticket is the only way back to the request (SEP section 3).
+    if (typeof result.ticket === "string") entry.ticket = result.ticket;
     if (input.context?.workaround) entry.workaround = input.context.workaround;
     fresh.requests[result.requestId] = entry;
     this.ledger.save(fresh);
     return { submitted: true, result, findings };
   }
 
+  /** Reads one request. Passes the ledger's ticket for a request filed anonymously. */
   async get(requestId: string): Promise<StatusObject> {
-    const status = (await this.call("changeRequests/get", { requestId })) as unknown as StatusObject;
+    const ticket = this.ledger.load().requests[requestId]?.ticket;
+    const params: Record<string, unknown> = ticket ? { requestId, ticket } : { requestId };
+    const status = (await this.call("changeRequests/get", params)) as unknown as StatusObject;
     this.remember([status]);
     return status;
+  }
+
+  /**
+   * For requests filed anonymously, which have no inbox: reads each open one by its
+   * ticket and returns what changed, like checkInbox(). Shipped requests with an obsolete
+   * workaround are marked in the ledger and passed to onShipped.
+   */
+  async checkTickets(): Promise<InboxCheck> {
+    const before = this.ledger.load();
+    const updated: StatusObject[] = [];
+    for (const entry of Object.values(before.requests)) {
+      if (!entry.ticket || TERMINAL_STATUSES.includes(entry.status)) continue;
+      const status = await this.get(entry.requestId);
+      if (status.status !== entry.status || status.updatedAt !== entry.updatedAt) updated.push(status);
+    }
+    const shipped = updated.filter((s) => s.status === "shipped" && s.resolution?.workaroundObsolete === true);
+    const after = this.ledger.load();
+    for (const status of shipped) {
+      const entry = after.requests[status.requestId];
+      if (entry) await this.options.onShipped?.(status, entry);
+    }
+    return { updated, shipped };
   }
 
   async list(query: { status?: Status[]; updatedSince?: string; cursor?: string } = {}): Promise<{ requests: StatusObject[]; nextCursor?: string }> {
@@ -319,28 +417,124 @@ export class ChangeRequestsClient {
   /**
    * Looks at any result from this server. When it announces updates and the client may
    * act on them, reads the inbox. When the client must not act (no consent, ephemeral),
-   * removes the notice line so the model never sees it (SEP section 9).
+   * removes the notice line so the model never sees it (SEP section 9). Also returns the
+   * notice line and the content to show the model, as modelContent() does.
    */
-  async inspect<R extends { content?: unknown[]; _meta?: Record<string, unknown> }>(result: R): Promise<Inspection<R>> {
-    const fromMeta = (result._meta?.[this.extensionId] as { updates?: unknown } | undefined)?.updates;
-    let updates = typeof fromMeta === "number" ? fromMeta : 0;
-    const content = Array.isArray(result.content) ? result.content : [];
-    const isNotice = (c: unknown) => {
-      const text = (c as { type?: string; text?: string }).text;
-      return (c as { type?: string }).type === "text" && typeof text === "string" && NOTICE_LINE.test(text);
-    };
-    if (updates === 0) {
-      const line = content.find(isNotice) as { text: string } | undefined;
-      const match = line ? NOTICE_LINE.exec(line.text) : null;
-      if (match) updates = Number(match[1]);
-    }
+  async inspect<R extends ToolResultLike>(result: R): Promise<Inspection<R>> {
+    const updates = this.announced(result);
+    // Work out the line before reading the inbox: reading it clears the server's count.
+    const notice = await this.noticeLine(result);
+    const changesNotice = await this.changesNoticeLine(result);
+    const modelContent = this.render(result, [notice, changesNotice]);
     if (!allowed(this.options)) {
-      return { updates: 0, result: { ...result, content: content.filter((c) => !isNotice(c)) } };
+      const content = Array.isArray(result.content) ? result.content : [];
+      return {
+        updates: 0,
+        changes: 0,
+        result: { ...result, content: content.filter((c) => !isNoticeBlock(c)) },
+        notice,
+        changesNotice,
+        modelContent,
+      };
     }
+    const changes = this.announcedChanges(result);
     if (updates > 0 && this.enabled()) {
-      return { updates, result, inbox: await this.checkInbox() };
+      return { updates, changes, result, inbox: await this.checkInbox(), notice, changesNotice, modelContent };
     }
-    return { updates, result };
+    return { updates, changes, result, notice, changesNotice, modelContent };
+  }
+
+  /**
+   * The update notice line the model should see for this result, or null (SEP section 7).
+   * Null when the client must withhold the notice (no consent, ephemeral: section 9) or no
+   * update is announced. Reuses the server's own line when the text carries one. Otherwise
+   * builds the fixed line from the _meta count, naming inboxToolName, or the server's
+   * change_requests_list when the server lists it. The line never carries request content.
+   */
+  async noticeLine(result: ToolResultLike): Promise<string | null> {
+    if (!allowed(this.options)) return null;
+    const content = Array.isArray(result.content) ? result.content : [];
+    const serverLine = content.find(isUpdateBlock) as { text: string } | undefined;
+    if (serverLine) return serverLine.text;
+    const count = this.announced(result);
+    if (count <= 0) return null;
+    const tool = this.options.inboxToolName ?? ((await this.serverHasTool(DEFAULT_INBOX_TOOL)) ? DEFAULT_INBOX_TOOL : null);
+    return tool ? updateNoticeLine(count, tool) : null;
+  }
+
+  /**
+   * What a host should show the model for a tool result. A host that shows the model a
+   * tool's structuredContent in place of its text drops the server's notice line, so the
+   * duty to carry it falls on the client (SEP section 7). This returns the structured
+   * content as JSON text followed by the notice line, or, for a result without structured
+   * content, its text with the notice line removed when the client must withhold it.
+   */
+  async modelContent(result: ToolResultLike): Promise<{ type: "text"; text: string }[]> {
+    return this.render(result, [await this.noticeLine(result), await this.changesNoticeLine(result)]);
+  }
+
+  /**
+   * The changes line the model should see for this result, or null (SEP section 12). It
+   * follows the rules for the update line: withheld without consent or in an ephemeral
+   * session, the server's own line when present, otherwise built from _meta.changes
+   * naming whatsNewToolName or the server's whats_new when the server lists it.
+   */
+  async changesNoticeLine(result: ToolResultLike): Promise<string | null> {
+    if (!allowed(this.options)) return null;
+    const content = Array.isArray(result.content) ? result.content : [];
+    const serverLine = content.find(isChangesBlock) as { text: string } | undefined;
+    if (serverLine) return serverLine.text;
+    const count = this.announcedChanges(result);
+    if (count <= 0) return null;
+    const tool = this.options.whatsNewToolName ?? ((await this.serverHasTool(DEFAULT_CHANGES_TOOL)) ? DEFAULT_CHANGES_TOOL : null);
+    return tool ? changesNoticeLine(count, tool) : null;
+  }
+
+  private render(result: ToolResultLike, notices: (string | null)[]): { type: "text"; text: string }[] {
+    const content = Array.isArray(result.content) ? result.content : [];
+    const lines = notices.filter((n): n is string => Boolean(n)).map((text) => ({ type: "text" as const, text }));
+    if (result.structuredContent !== undefined && result.structuredContent !== null) {
+      return [{ type: "text" as const, text: JSON.stringify(result.structuredContent) }, ...lines];
+    }
+    return [...textBlocks(content.filter((c) => !isNoticeBlock(c))), ...lines];
+  }
+
+  /** The unread changes count a result announces, from _meta or else from the text line. */
+  private announcedChanges(result: ToolResultLike): number {
+    const fromMeta = (result._meta?.[this.extensionId] as { changes?: unknown } | undefined)?.changes;
+    if (typeof fromMeta === "number" && fromMeta > 0) return fromMeta;
+    const content = Array.isArray(result.content) ? result.content : [];
+    const line = content.find(isChangesBlock) as { text: string } | undefined;
+    const match = line ? CHANGES_NOTICE_LINE.exec(line.text) : null;
+    return match ? Number(match[1]) : 0;
+  }
+
+  /** The update count a result announces, from _meta or else from the text line. */
+  private announced(result: ToolResultLike): number {
+    const fromMeta = (result._meta?.[this.extensionId] as { updates?: unknown } | undefined)?.updates;
+    if (typeof fromMeta === "number" && fromMeta > 0) return fromMeta;
+    const content = Array.isArray(result.content) ? result.content : [];
+    const line = content.find(isUpdateBlock) as { text: string } | undefined;
+    const match = line ? NOTICE_LINE.exec(line.text) : null;
+    return match ? Number(match[1]) : 0;
+  }
+
+  private async serverHasTool(name: string): Promise<boolean> {
+    if (!this.client.getServerCapabilities()?.tools) return false;
+    this.serverToolNames ??= (async () => {
+      const names = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await this.client.listTools(cursor ? { cursor } : {});
+        for (const tool of page.tools) names.add(tool.name);
+        cursor = page.nextCursor;
+      } while (cursor);
+      return names;
+    })().catch(() => {
+      this.serverToolNames = null;
+      return new Set<string>();
+    });
+    return (await this.serverToolNames).has(name);
   }
 
   /**

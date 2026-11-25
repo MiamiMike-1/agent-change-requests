@@ -1,8 +1,8 @@
 # Publishes @agent-change-requests/server to npm when a tag like server-v0.1.0 is pushed.
-# Publishing uses npm trusted publishing (OIDC) once it is set up for the package on
-# npmjs.com. Until then, for the very first release, a repository secret NPM_TOKEN
-# holding a short-lived npm granular access token is used. Delete that secret once
-# trusted publishing is on.
+# Publishing uses npm trusted publishing (OIDC) only. No npm token is passed: when
+# NODE_AUTH_TOKEN is set, npm publishes with that token instead of OIDC, and a package
+# that requires 2FA refuses it (E403). Trusted publishing must be set up for the package
+# on npmjs.com, with this repository and this workflow file.
 name: Release server package
 
 on:
@@ -12,7 +12,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
+  id-token: write # npm trusted publishing and provenance
 
 jobs:
   publish:
@@ -37,5 +37,3 @@ jobs:
       - run: npm test --workspace packages/server
       - run: npm run build --workspace packages/server
       - run: npm publish --workspace packages/server --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

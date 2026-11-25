@@ -25,6 +25,10 @@ The three parts the SEP's Reference Implementation section plans, built on `@mod
 
 - `packages/demo`: an invoices server whose `list_invoices` cannot filter by customer in 1.0.0 and can in 1.1.0. `npm run demo` runs the loop from the gap to a confirmed shipped change and writes a transcript. CI runs it on every pull request.
 
+## Spec draft: reference implementation status (November 25, 2026)
+
+- The Reference Implementation section now describes the server package that exists, and lists what is still missing before review: the protocol methods, status events, the changes feed, anonymous callers, a home in the official TypeScript SDK, client support, and the demonstration server.
+
 ## Server package 0.2.0 (November 24, 2026)
 
 - New health check, so anyone can confirm a deployed server is up and can reach its store without signing in or copying a token. `healthResponse` answers `200` with `"store": "reachable"` or `503` with `"store": "unreachable"`, and `isHealthRequest` picks out `GET /health` so it can run before the credential check.

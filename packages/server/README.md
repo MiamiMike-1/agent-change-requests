@@ -161,14 +161,23 @@ Because every server that uses this package computes the same scorecard and the 
 
 ### Relaying requests to the spec's maintainers
 
-An agent can also file a request about the extension itself with `target: { type: "extension", name: "<extension id>", component: "spec" | "server-sdk" | "client-sdk" }`. Those are marked `spec` too. To send them one level up, attach an `UpstreamRelay`:
+An agent can also file a request about the extension itself with `target: { type: "extension", name: "<extension id>", component: "spec" | "server-sdk" | "client-sdk" }`. Those are marked `spec` too. The same target works for any extension the server implements. To send them one level up, attach an `UpstreamRelay`:
 
 ```ts
 import { GitHubIssueSink, UpstreamRelay } from "@agent-change-requests/server";
 
 const relay = new UpstreamRelay({
   service,
-  sink: new GitHubIssueSink({ token: process.env.UPSTREAM_GITHUB_TOKEN! }), // repo defaults to MiamiMike-1/agent-change-requests
+  // One sink per extension, keyed by its identifier: wherever that extension's
+  // maintainers say they accept requests.
+  sinks: {
+    "com.example/change-requests": new GitHubIssueSink({
+      repo: "example-org/change-requests-spec",
+      token: process.env.UPSTREAM_GITHUB_TOKEN!,
+    }),
+  },
+  // Also relay spec requests that target a change_requests_* tool.
+  extensionId: "com.example/change-requests",
   serverName: "Example MCP",
 });
 relay.attach(); // forwards each new spec request after submit answers
@@ -177,7 +186,7 @@ relay.attach(); // forwards each new spec request after submit answers
 await relay.sync();
 ```
 
-The relay sends only `kind`, `title`, `description`, `target`, `failureMode`, and `impact`. It never sends the principal, `context`, or acceptance tests, and it neutralizes `@` mentions. It forwards at most 20 requests a day by default (`maxPerDay`). On forwarding, a `received` request moves to `triaged` with the issue link as its message, so the requester can follow it. The issue is public, so say so in your policy (SEP section 3). Requires a token that can create issues in the target repository; use `repo` to relay somewhere else, or write your own `UpstreamSink`.
+The relay sends only `kind`, `title`, `description`, `target`, `failureMode`, and `impact`. It never sends the principal, `context`, or acceptance tests, and it neutralizes `@` mentions. It forwards at most 20 requests a day by default (`maxPerDay`). On forwarding, a `received` request moves to `triaged` with the issue link as its message, so the requester can follow it. The issue is public, so say so in your policy (SEP section 3). An extension with no entry in `sinks` is not relayed: its requests stay on this server like any other. The token must be able to create issues in each repository. For a tracker other than GitHub, write your own `UpstreamSink`.
 
 ## Store conformance
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Server package 0.2.0 (November 24, 2026)
+
+- New health check, so anyone can confirm a deployed server is up and can reach its store without signing in or copying a token. `healthResponse` answers `200` with `"store": "reachable"` or `503` with `"store": "unreachable"`, and `isHealthRequest` picks out `GET /health` so it can run before the credential check.
+- The answer never includes records, counts, or error text. The reason for a failure goes to the server's own `onError` hook.
+- Stores may add an optional `ping()`. Without one, the check reads a single request id that does not exist.
+- The store conformance suite now checks that a store passes the health check.
+
 ## Releases (November 24, 2026)
 
 - `@agent-change-requests/server` is set up to publish to npm from a `server-v*` tag, with tests and provenance. Apps install it with `npm install` and can get update pull requests from Dependabot.

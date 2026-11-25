@@ -12,3 +12,13 @@ export {
 } from "./service.js";
 export { computeScorecard, scorecardRow, median, type Scorecard, type ScorecardRow, type ScorecardNumbers, type ScorecardOptions } from "./scorecard.js";
 export { applyUpdateNotice, updateNoticeLine, type NoticeOptions } from "./notice.js";
+export {
+  checkHealth,
+  healthResponse,
+  isHealthRequest,
+  DEFAULT_HEALTH_TIMEOUT_MS,
+  HEALTH_PROBE_REQUEST_ID,
+  type HealthOptions,
+  type HealthReport,
+  type StoreHealth,
+} from "./health.js";

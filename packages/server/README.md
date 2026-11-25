@@ -10,6 +10,7 @@ It handles the parts every server needs the same way:
 - **Update notice:** a count in `_meta` and one plain line of text on every tool result while an update is unread.
 - **Confirmation:** the requester's own verdict on a shipped change, kept separately from the server's claim, plus whether it adopted the change.
 - **Scorecard:** each request's stages and times, and the running numbers (time to live, build time, human time, confirmed fix rate, adoption, gaps).
+- **Health check:** a route that needs no credential and says whether the server can reach its store, without returning any data.
 - **MCP tools:** `change_requests_submit`, `_list`, `_get`, `_withdraw`, `_confirm`, and `_scorecard` on any `McpServer` from `@modelcontextprotocol/sdk`.
 
 ## What your app supplies
@@ -89,6 +90,31 @@ import { runStoreConformance } from "@agent-change-requests/server/testing";
 
 runStoreConformance({ describe, it }, () => new MyPostgresStore(freshDatabase()));
 ```
+
+## Health check
+
+A deployed server should be able to say whether it is up and can reach its store without anyone signing in first. Leave one route open and send it to `healthResponse`, before your credential check:
+
+```ts
+import { healthResponse, isHealthRequest } from "@agent-change-requests/server";
+
+async function handle(request: Request): Promise<Response> {
+  if (isHealthRequest(request)) {
+    return healthResponse({
+      store,
+      method: request.method,
+      extensionId: "com.example/change-requests",
+      version: "1.4.0", // leave out to keep your version private
+      onError: (error) => console.error("change request store unreachable", error),
+    });
+  }
+  // ...check credentials, then handle MCP as usual
+}
+```
+
+`GET <your MCP URL>/health` then answers `200 {"ok":true,"store":"reachable",...}`, or `503` with `"store":"unreachable"` when the store fails or takes longer than `timeoutMs` (3 seconds by default). `isHealthRequest` matches only GET and HEAD on a path ending in `/health`, so every other route keeps its credential check.
+
+The route is public, so the answer is a fixed shape: no records, no counts, and never the error text, which goes to `onError` only. The probe is one read of a request id that does not exist. If your store can check itself more cheaply or more thoroughly, give it an optional `ping()` and the health check uses that. For a server that is not built on `Request` and `Response`, call `checkHealth(options)` and send the report yourself.
 
 ## Install and stay current
 

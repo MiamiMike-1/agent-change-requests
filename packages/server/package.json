@@ -1,6 +1,6 @@
 {
   "name": "@agent-change-requests/server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Server-side implementation of the Agent Change Requests extension: request rules, lifecycle, principal-scoped inbox, confirmations, scorecard, and MCP tools.",
   "license": "MIT",
   "repository": {

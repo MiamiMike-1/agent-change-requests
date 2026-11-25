@@ -428,31 +428,38 @@ Clients that do not implement the extension see no change.
 
 ## Reference Implementation
 
-The extension process requires at least one reference implementation in an official SDK before review. That implementation does not exist yet. Work toward it has started outside the SDK.
+The extension process requires at least one reference implementation in an official SDK before review. That implementation does not exist yet: the work below is built on the official TypeScript SDK (`@modelcontextprotocol/sdk` 1.x), but lives in this repository, not in the SDK.
 
-**What exists today.** [`@agent-change-requests/server`](packages/server) (version 0.2.0, MIT) is a server package for the TypeScript SDK. It plugs into any `McpServer` from `@modelcontextprotocol/sdk` and provides:
+**What exists today.** The plan has three parts, and each now has a working prototype (MIT):
 
-- Request validation with the field limits in Section 3, idempotency keys, and a daily cap per principal.
-- The lifecycle in Section 5, with terminal statuses that never move again.
-- The principal-scoped inbox and the update notice in Section 7, as a count in `_meta` and one line of text on every wrapped tool result, with no inbox for shared credentials.
-- Confirmation as in Section 11, kept apart from the server's own `shipped`, plus whether the requester adopted the change.
-- An `onEvent` hook on every change, a store interface with an in-memory store, a conformance suite, a Postgres schema, and a health check that needs no credential.
-- Six model-facing tools: `change_requests_submit`, `_list`, `_get`, `_withdraw`, `_confirm`, and `_scorecard`.
+1. **Server middleware.** [`@agent-change-requests/server`](packages/server) 0.3.0. One call, `installChangeRequests(server, options)`, adds the extension to any `McpServer`:
+   - It advertises the Section 1 settings object under `capabilities.extensions`, in the `initialize` result, because SDK 1.x has no `server/discover` yet.
+   - It answers `changeRequests/submit`, `/get`, `/list`, `/withdraw`, and `/confirm`, with the error reasons in Section 10.
+   - It stores requests in SQLite, with idempotency keys and a daily cap per principal. A store interface, a conformance suite, and a Postgres schema cover other databases.
+   - It applies the lifecycle in Section 5 and the principal-scoped inbox in Section 7. The update notice goes into each result's `_meta` and, as one line of text, onto every tool result. Shared credentials get no inbox.
+   - It publishes a `changeRequest.updated` event with the status object on every status change (Section 8). The SDK has no Events implementation, so delivery is left to the server's own.
+   - It records confirmation as in Section 11, kept apart from the server's own `shipped`.
+   - It keeps six tools (`change_requests_submit`, `_list`, `_get`, `_withdraw`, `_confirm`, and `_scorecard`) for clients without the extension. Clients that advertise the extension don't see the submit tool, as Backward Compatibility recommends.
+2. **Client support.** [`@agent-change-requests/client`](packages/client) 0.1.0 wraps the SDK's `Client`:
+   - It advertises the extension only with consent, and never from an ephemeral session.
+   - It gives the model one submission tool, with a description the client writes.
+   - It runs a redaction pass over every model-written field and argument, with an optional review step.
+   - It caps submissions per day and does not file a second request for a gap that is already open.
+   - It reads the inbox when a response carries an update count, and records shipped results where a later session will find them.
+   - It re-runs its own acceptance tests and confirms the outcome.
+3. **A demonstration server.** [`packages/demo`](packages/demo) has one tool with a deliberate gap: `list_invoices` cannot filter by customer in version 1.0.0. A scripted run files a request with an acceptance test, ships the fix in 1.1.0, and then a second session collects the `shipped` status, re-runs the test, confirms `pass`, and drops its workaround. The run is part of CI.
 
 Tasker's MCP server, the source of the evidence in the README, has implemented the draft since Tasker MCP 1.3.0 under the vendor prefix `com.rocketproforma/change-requests`.
 
-**What is still missing.** The plan for the reference implementation has three parts. The package covers part of the first.
+**What is still missing.**
 
-1. **Server middleware for the TypeScript SDK.** Still needed:
-   - The `changeRequests/*` protocol methods in Section 2. The package offers tools only, which reach the clients in use today but carry none of the client-side consent or redaction.
-   - Status events over the Events extension (Section 8). `onEvent` is the hook to build them on.
-   - The changes feed (Section 12).
-   - Anonymous callers, which the package does not accept.
-   - A move from this repository into the official SDK, or a form the SDK maintainers accept.
-2. **Client support in the TypeScript SDK.** Not started. It advertises the extension, exposes the model-facing submission tool, applies a redaction pass, and checks the inbox when a response carries an update count.
-3. **A demonstration server.** Not started. One tool with a deliberate gap, a recorded agent run that files a request with an acceptance test, a change that ships, and a second session that collects the `shipped` status and removes its workaround.
+- A recorded run with a real model. The demo runs a scripted agent, but its server also runs over stdio, so a real agent can be pointed at it.
+- The changes feed (Section 12).
+- Anonymous callers and tickets. The server package does not accept them.
+- Delivery over the Events extension, which waits on an Events implementation in the SDK.
+- A move into the official SDK, or a form the SDK maintainers accept.
 
-The package and the prototype use a vendor prefix until the identifier is approved.
+The packages and the demo use a vendor prefix until the identifier is approved.
 
 ## Security Implications
 

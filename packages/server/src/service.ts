@@ -89,6 +89,7 @@ export class ChangeRequestService {
   private readonly dailyCap: number;
   private readonly isShared: (principal: string) => boolean;
   private readonly onEvent?: (event: ChangeEvent) => void | Promise<void>;
+  private readonly listeners = new Set<(event: ChangeEvent) => void | Promise<void>>();
   private readonly specTargets: Set<string>;
   private readonly now: () => Date;
   private readonly newId: () => string;
@@ -269,6 +270,27 @@ export class ChangeRequestService {
   }
 
   // ---- Builder side ------------------------------------------------------
+
+  /**
+   * Adds a listener for every change, alongside onEvent. The protocol middleware uses
+   * it to publish status events. Returns a function that removes the listener.
+   */
+  subscribe(listener: (event: ChangeEvent) => void | Promise<void>): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /**
+   * The status object (SEP section 6) of any request, for the builder side and for
+   * status events. Unlike get, it checks no owner and does not clear the update.
+   */
+  async statusOf(requestId: string): Promise<StatusObject> {
+    const record = typeof requestId === "string" ? await this.store.get(requestId) : null;
+    if (!record) throw new ChangeRequestError("not_found", "No such request.");
+    return this.toStatus(record);
+  }
 
   /** Every principal's requests, for triage and the weekly roll-up. Does not clear updates. */
   async listAll(query: ListQuery = {}): Promise<Page<ChangeRequestRecord>> {
@@ -458,11 +480,13 @@ export class ChangeRequestService {
   }
 
   private async emit(event: ChangeEvent): Promise<void> {
-    if (!this.onEvent) return;
-    try {
-      await this.onEvent(event);
-    } catch {
-      // A failed notification must never fail the request.
+    for (const listener of [this.onEvent, ...this.listeners]) {
+      if (!listener) continue;
+      try {
+        await listener(event);
+      } catch {
+        // A failed notification must never fail the request.
+      }
     }
   }
 }

@@ -1,5 +1,30 @@
 # Changelog
 
+## Reference implementation (November 25, 2026)
+
+The three parts the SEP's Reference Implementation section plans, built on `@modelcontextprotocol/sdk` 1.x.
+
+**Server package 0.3.0**
+
+- New `installChangeRequests(server, options)` in `@agent-change-requests/server/middleware`: adds the extension to any `McpServer` in one call. It advertises the settings object under `capabilities.extensions`, answers `changeRequests/submit`, `/get`, `/list`, `/withdraw`, and `/confirm` with the error reasons from SEP section 10, and puts the update count in each result's `_meta`.
+- The update notice is added to every tool registered after the install.
+- The `change_requests_*` tools stay for clients without the extension. Clients that advertise it no longer see `change_requests_submit`, so the model sees one way to submit.
+- Status events: with `publishEvent`, every status change produces a `changeRequest.updated` event carrying the status object, and the server advertises `events: true`. `changeRequestUpdatedEventType` is the entry for `events/list`.
+- New `SqliteStore` in `@agent-change-requests/server/sqlite`, on `node:sqlite` (Node 22.5 and later) or `better-sqlite3`. It passes the store conformance suite.
+- `ChangeRequestService` gains `subscribe()` for extra listeners and `statusOf()` for reading a status object without clearing its update.
+- `registerChangeRequestTools` now returns the tools it registered.
+
+**Client package 0.1.0 (new)**
+
+- `@agent-change-requests/client` wraps `Client` from the SDK. It advertises the extension only with consent and never from an ephemeral session, gives the model one submission tool whose description the client writes, and redacts credentials, contact details, paths, and app-supplied sensitive values before sending.
+- Client-side controls: a daily cap per server, no second request for a gap that is already open, and an optional review hook.
+- `inspect()` reads the inbox when a result carries an update count, records shipped requests and obsolete workarounds in a ledger that outlives the session, and strips the notice line when the client has no consent.
+- `retestAndConfirm()` re-runs the client's own acceptance tests and confirms with per-test outcomes.
+
+**Demo**
+
+- `packages/demo`: an invoices server whose `list_invoices` cannot filter by customer in 1.0.0 and can in 1.1.0. `npm run demo` runs the loop from the gap to a confirmed shipped change and writes a transcript. CI runs it on every pull request.
+
 ## Spec draft: reference implementation status (November 25, 2026)
 
 - The Reference Implementation section now describes the server package that exists, and lists what is still missing before review: the protocol methods, status events, the changes feed, anonymous callers, a home in the official TypeScript SDK, client support, and the demonstration server.

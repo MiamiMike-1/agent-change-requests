@@ -1,0 +1,34 @@
+{
+  "name": "@agent-change-requests/demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A demonstration MCP server with one deliberate gap, and a scripted run of the whole change request loop through a shipped confirmation.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "invoices-demo-server": "./dist/stdio.js",
+    "invoices-demo-ship": "./dist/ship.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "demo": "npm run build && node --disable-warning=ExperimentalWarning dist/run.js",
+    "server": "node --disable-warning=ExperimentalWarning dist/stdio.js",
+    "ship": "node --disable-warning=ExperimentalWarning dist/ship.js"
+  },
+  "dependencies": {
+    "@agent-change-requests/client": "*",
+    "@agent-change-requests/server": "*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}

@@ -5,7 +5,7 @@
  * Tools, not protocol methods: few clients implement the extension's methods yet,
  * so the tools are how agents reach it today (see SEP section 7 and Backward Compatibility).
  */
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer, RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
 import { ChangeRequestError, isChangeRequestError } from "./errors.js";
@@ -95,8 +95,9 @@ export function withUpdateNotice<A extends unknown[], R extends { content?: unkn
 }
 
 /** Registers change_requests_submit, _list, _get, _withdraw, _confirm, and _scorecard. */
-export function registerChangeRequestTools(server: McpServer, options: McpAdapterOptions): void {
+export function registerChangeRequestTools(server: McpServer, options: McpAdapterOptions): Record<string, RegisteredTool> {
   const { service, appName } = options;
+  const tools: Record<string, RegisteredTool> = {};
 
   const run = async (call: CallInfo, fn: (principal: string | null | undefined) => Promise<ToolResult>): Promise<ToolResult> => {
     let principal: string | null | undefined;
@@ -160,7 +161,7 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
       .describe("spec when the request is about these change request tools or the Agent Change Requests standard itself, app (default) for everything else. A request that targets a change_requests tool is marked spec on its own."),
   };
 
-  server.registerTool(
+  tools["change_requests_submit"] = server.registerTool(
     "change_requests_submit",
     {
       description: [
@@ -181,7 +182,7 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
       }),
   );
 
-  server.registerTool(
+  tools["change_requests_list"] = server.registerTool(
     "change_requests_list",
     {
       description: `Your inbox: your change requests to ${appName} and their status, newest change first, at most 50 per page. Call it when a result says updates are waiting, or before using a workaround, to see whether a fix has shipped. Pass nextCursor back as cursor for the next page.`,
@@ -200,7 +201,7 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
       }),
   );
 
-  server.registerTool(
+  tools["change_requests_get"] = server.registerTool(
     "change_requests_get",
     {
       description: "Read the current status of one of your change requests by requestId.",
@@ -209,7 +210,7 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
     async (args, extra) => run(extra, async (principal) => ok({ ...(await service.get(principal, args.requestId)) })),
   );
 
-  server.registerTool(
+  tools["change_requests_withdraw"] = server.registerTool(
     "change_requests_withdraw",
     {
       description: "Withdraw a request you no longer need. Only works before it reaches a final status (shipped, declined, duplicate, or withdrawn).",
@@ -219,7 +220,7 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
     async (args, extra) => run(extra, async (principal) => ok({ ...(await service.withdraw(principal, args.requestId)) })),
   );
 
-  server.registerTool(
+  tools["change_requests_confirm"] = server.registerTool(
     "change_requests_confirm",
     {
       description:
@@ -239,7 +240,7 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
     async (args, extra) => run(extra, async (principal) => ok({ ...(await service.confirm(principal, args)) })),
   );
 
-  server.registerTool(
+  tools["change_requests_scorecard"] = server.registerTool(
     "change_requests_scorecard",
     {
       description:
@@ -255,4 +256,5 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
         return ok({ ledger: card.ledger, numbers: card.numbers, markdown: card.markdown } as unknown as Record<string, unknown>);
       }),
   );
+  return tools;
 }

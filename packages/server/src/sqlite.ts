@@ -5,8 +5,15 @@
  * (built into Node 22.5 and later) and better-sqlite3 provide. SqliteStore.open(path)
  * opens a file with node:sqlite, so most servers need no extra dependency.
  */
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, decodeCursor, encodeCursor, type ChangeRequestStore } from "./store.js";
-import type { ChangeRequestRecord, Gap, ListQuery, Page } from "./types.js";
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  decodeCursor,
+  encodeCursor,
+  type ChangeFeedStore,
+  type ChangeRequestStore,
+} from "./store.js";
+import type { ChangeRecord, ChangeRequestRecord, FeedReader, Gap, ListQuery, Page } from "./types.js";
 
 /** The part of a SQLite statement this store uses. */
 export interface SqliteStatement {
@@ -47,6 +54,16 @@ CREATE TABLE IF NOT EXISTS change_request_gaps (
   at_ms     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS change_request_gaps_principal ON change_request_gaps (principal, at_ms);
+CREATE TABLE IF NOT EXISTS change_feed (
+  seq       INTEGER PRIMARY KEY AUTOINCREMENT,
+  change_id TEXT NOT NULL UNIQUE,
+  record    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS change_feed_readers (
+  principal TEXT PRIMARY KEY,
+  seen_seq  INTEGER NOT NULL,
+  muted     INTEGER NOT NULL
+);
 `;
 
 interface Row {
@@ -59,7 +76,7 @@ function ms(iso: string): number {
   return t;
 }
 
-export class SqliteStore implements ChangeRequestStore {
+export class SqliteStore implements ChangeRequestStore, ChangeFeedStore {
   private readonly db: SqliteDatabase;
 
   /** Wraps an open database and creates the tables if they are missing. */
@@ -226,5 +243,40 @@ export class SqliteStore implements ChangeRequestStore {
 
   async ping(): Promise<void> {
     this.db.prepare("SELECT 1 AS ok").get();
+  }
+
+  async appendChange(change: Omit<ChangeRecord, "seq">): Promise<ChangeRecord> {
+    const result = this.db
+      .prepare("INSERT INTO change_feed (change_id, record) VALUES (?, ?)")
+      .run(change.changeId, JSON.stringify(change)) as { changes: number | bigint; lastInsertRowid?: number | bigint };
+    let seq = result.lastInsertRowid === undefined ? undefined : Number(result.lastInsertRowid);
+    if (seq === undefined) {
+      const row = this.db.prepare("SELECT seq FROM change_feed WHERE change_id = ?").get(change.changeId) as { seq: number | bigint };
+      seq = Number(row.seq);
+    }
+    return { ...change, seq };
+  }
+
+  async listChanges(afterSeq = 0): Promise<ChangeRecord[]> {
+    const rows = this.db
+      .prepare("SELECT seq, record FROM change_feed WHERE seq > ? ORDER BY seq DESC")
+      .all(afterSeq) as { seq: number | bigint; record: string }[];
+    return rows.map((r) => ({ ...(JSON.parse(r.record) as Omit<ChangeRecord, "seq">), seq: Number(r.seq) }));
+  }
+
+  async getReader(principal: string): Promise<FeedReader | null> {
+    const row = this.db
+      .prepare("SELECT principal, seen_seq, muted FROM change_feed_readers WHERE principal = ?")
+      .get(principal) as { principal: string; seen_seq: number | bigint; muted: number | bigint } | undefined;
+    return row ? { principal: row.principal, seenSeq: Number(row.seen_seq), muted: Number(row.muted) === 1 } : null;
+  }
+
+  async putReader(reader: FeedReader): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO change_feed_readers (principal, seen_seq, muted) VALUES (?, ?, ?)
+         ON CONFLICT (principal) DO UPDATE SET seen_seq = excluded.seen_seq, muted = excluded.muted`,
+      )
+      .run(reader.principal, reader.seenSeq, reader.muted ? 1 : 0);
   }
 }

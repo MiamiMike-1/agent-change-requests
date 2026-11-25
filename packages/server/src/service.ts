@@ -1,13 +1,19 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { ChangeRequestError } from "./errors.js";
 import { canTransition, isTerminal } from "./lifecycle.js";
 import { computeScorecard, type Scorecard, type ScorecardOptions } from "./scorecard.js";
-import type { ChangeRequestStore } from "./store.js";
-import { LIMITS, validateConfirmTests, validateSubmit } from "./validate.js";
+import { decodeCursor, encodeCursor, isChangeFeedStore, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, type ChangeFeedStore, type ChangeRequestStore } from "./store.js";
+import { LIMITS, validateChange, validateConfirmTests, validateSubmit } from "./validate.js";
+import { compareVersions as defaultCompareVersions, type CompareVersions } from "./versions.js";
 import {
   KINDS,
   type About,
+  type ChangeEntry,
   type ChangeEvent,
+  type ChangeRecord,
+  type ChangesPage,
+  type ChangesQuery,
+  type ChangeType,
   type ChangeRequestRecord,
   type Kind,
   type ListQuery,
@@ -29,7 +35,15 @@ export const EXTENSION_TOOL_NAMES = [
   "change_requests_withdraw",
   "change_requests_confirm",
   "change_requests_scorecard",
+  "whats_new",
 ] as const;
+
+/**
+ * The principal stored on requests from anonymous callers. They share it, so the
+ * daily cap is shared and demand counts all anonymous callers as one. A real
+ * principal with this value is refused.
+ */
+export const ANONYMOUS_PRINCIPAL = "acr:anonymous";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -49,6 +63,25 @@ export interface ServiceOptions {
   isSharedCredential?: (principal: string) => boolean;
   /** Called after every change, for notifications or MCP Events. Errors are swallowed. */
   onEvent?: (event: ChangeEvent) => void | Promise<void>;
+  /**
+   * Accept requests from callers with no authenticated principal (SEP section 3).
+   * Each gets a ticket that reads that one request. No inbox, no notice, no
+   * confirmation. Default false: leave it off unless you have another abuse control.
+   */
+  anonymous?: boolean;
+  /** Most requests all anonymous callers together may submit in 24 hours. Default 50. 0 turns the cap off. */
+  anonymousDailyCap?: number;
+  /**
+   * Where the changes feed (SEP section 12) is kept. Default: the store, when it
+   * implements ChangeFeedStore (MemoryStore and SqliteStore do).
+   */
+  feed?: ChangeFeedStore;
+  /** Set false to turn the changes feed off even when the store supports it. */
+  changes?: boolean;
+  /** The server's current version, returned by changes(). Default: the newest version in the feed. */
+  currentVersion?: string | (() => string);
+  /** Orders versions for sinceVersion. Default: semantic versions. */
+  compareVersions?: CompareVersions;
   /** Extra target names that mark a request as about the spec. */
   specTargets?: readonly string[];
   /** Clock and id hooks, for tests. */
@@ -79,6 +112,45 @@ function defaultId(): string {
   return `crq_${randomBytes(8).toString("hex")}`;
 }
 
+function newTicket(): string {
+  return `crt_${randomBytes(16).toString("hex")}`;
+}
+
+function sameSecret(a: string, b: string): boolean {
+  const x = Buffer.from(a, "utf8");
+  const y = Buffer.from(b, "utf8");
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+/** Input for publishChange: one entry of the changes feed. */
+export interface PublishChangeInput {
+  version: string;
+  type: ChangeType;
+  summary: string;
+  /** Required true for a change that can break a call that worked before. Always true for removed. */
+  breaking?: boolean;
+  changed?: ChangeEntry["changed"];
+  changelogUri?: string;
+  /** For deprecated entries: the earliest date (YYYY-MM-DD) the target may be removed. */
+  removeAfter?: string;
+  /** Default now. */
+  publishedAt?: string;
+  /**
+   * all (default): every caller sees it. requester: only the owners of
+   * changeRequestIds and the principals in releasedTo see it.
+   */
+  availability?: "all" | "requester";
+  releasedTo?: string[];
+  /** Requests this change resolved. Each owner sees its own ids, and no one else's. */
+  changeRequestIds?: string[];
+}
+
+/** Counts for the notice: unread request updates, and unread breaking or deprecated changes. */
+export interface NoticeCounts {
+  updates: number;
+  changes: number;
+}
+
 /**
  * The extension's server side, independent of transport. The MCP adapter in "./mcp"
  * calls the caller-facing methods. The builder side (triage, CI, release scripts)
@@ -87,7 +159,13 @@ function defaultId(): string {
 export class ChangeRequestService {
   readonly kinds: readonly Kind[];
   readonly acceptanceTests: boolean;
+  /** Whether callers without an authenticated principal may submit. */
+  readonly anonymous: boolean;
   private readonly store: ChangeRequestStore;
+  private readonly feed: ChangeFeedStore | undefined;
+  private readonly anonymousDailyCap: number;
+  private readonly currentVersionOption: ServiceOptions["currentVersion"];
+  private readonly compare: CompareVersions;
   private readonly dailyCap: number;
   private readonly isShared: (principal: string) => boolean;
   private readonly onEvent?: (event: ChangeEvent) => void | Promise<void>;
@@ -102,6 +180,14 @@ export class ChangeRequestService {
     if (this.kinds.length === 0) throw new Error("A server must accept at least one kind.");
     this.acceptanceTests = options.acceptanceTests ?? true;
     this.dailyCap = options.dailyCap ?? 20;
+    this.anonymous = options.anonymous ?? false;
+    this.anonymousDailyCap = options.anonymousDailyCap ?? 50;
+    if (options.changes !== false) {
+      const feed = options.feed ?? (isChangeFeedStore(options.store) ? options.store : undefined);
+      if (feed) this.feed = feed;
+    }
+    this.currentVersionOption = options.currentVersion;
+    this.compare = options.compareVersions ?? defaultCompareVersions;
     this.isShared = options.isSharedCredential ?? (() => false);
     if (options.onEvent) this.onEvent = options.onEvent;
     this.specTargets = new Set([...EXTENSION_TOOL_NAMES, ...(options.specTargets ?? [])]);
@@ -111,23 +197,30 @@ export class ChangeRequestService {
 
   // ---- Caller side -------------------------------------------------------
 
+  /** Whether this service answers changes() (SEP section 12). */
+  get changesEnabled(): boolean {
+    return this.feed !== undefined;
+  }
+
   async submit(principal: string | null | undefined, input: unknown): Promise<SubmitResult> {
-    const who = this.requirePrincipal(principal);
+    const anonymous = !principal && this.anonymous;
+    const who = anonymous ? ANONYMOUS_PRINCIPAL : this.requirePrincipal(principal);
     const params = validateSubmit(input, { kinds: this.kinds, acceptanceTests: this.acceptanceTests });
 
     const existing = await this.store.findByIdempotencyKey(who, params.idempotencyKey);
     if (existing) return { ...existing.firstResult };
 
     const now = this.now();
-    if (this.dailyCap > 0) {
+    const cap = anonymous ? this.anonymousDailyCap : this.dailyCap;
+    if (cap > 0) {
       const since = new Date(now.getTime() - DAY_MS).toISOString();
       const count = await this.store.countSubmittedSince(who, since);
-      if (count >= this.dailyCap) {
+      if (count >= cap) {
         const oldest = await this.store.oldestSubmittedSince(who, since);
         const retryAfterMs = oldest ? Math.max(Date.parse(oldest) + DAY_MS - now.getTime(), 0) : DAY_MS;
         throw new ChangeRequestError(
           "rate_limited",
-          `At most ${this.dailyCap} change requests a day. Try again later.`,
+          `At most ${cap} change requests a day${anonymous ? " from anonymous callers" : ""}. Try again later.`,
           { retryAfterMs },
         );
       }
@@ -135,6 +228,9 @@ export class ChangeRequestService {
 
     const at = now.toISOString();
     const requestId = this.newId();
+    const firstResult: SubmitResult = { requestId, status: "received", duplicateOf: null, demand: 1 };
+    const ticket = anonymous ? newTicket() : undefined;
+    if (ticket) firstResult.ticket = ticket;
     const record: ChangeRequestRecord = {
       requestId,
       principal: who,
@@ -151,7 +247,7 @@ export class ChangeRequestService {
       approximate: [],
       unread: false,
       pickedUp: false,
-      firstResult: { requestId, status: "received", duplicateOf: null, demand: 1 },
+      firstResult,
       revision: 1,
       createdAt: at,
       updatedAt: at,
@@ -161,6 +257,10 @@ export class ChangeRequestService {
     if (params.failureMode !== undefined) record.failureMode = params.failureMode;
     if (params.impact) record.impact = params.impact;
     if (params.acceptanceTests) record.acceptanceTests = params.acceptanceTests;
+    if (ticket) {
+      record.anonymous = true;
+      record.ticket = ticket;
+    }
 
     try {
       await this.store.insert(record);
@@ -174,8 +274,12 @@ export class ChangeRequestService {
     return { ...record.firstResult };
   }
 
-  /** Reads one of the caller's own requests and clears its update. */
-  async get(principal: string | null | undefined, requestId: string): Promise<StatusObject> {
+  /**
+   * Reads one of the caller's own requests and clears its update. With a ticket, reads
+   * the one anonymous request the ticket was issued for, whoever calls.
+   */
+  async get(principal: string | null | undefined, requestId: string, ticket?: string): Promise<StatusObject> {
+    if (ticket !== undefined) return this.getByTicket(requestId, ticket);
     const who = this.requireInbox(principal);
     const record = await this.ownRecord(who, requestId);
     await this.markSeen([record]);
@@ -241,10 +345,94 @@ export class ChangeRequestService {
     return this.toStatus(record);
   }
 
-  /** How many of this principal's requests have an unread update. 0 for a shared credential. */
+  /** How many of this principal's requests have an unread update. 0 for a shared credential or an anonymous caller. */
   async pendingUpdates(principal: string | null | undefined): Promise<number> {
-    if (!principal || this.isShared(principal)) return 0;
+    if (!this.hasInbox(principal)) return 0;
     return this.store.countUnread(principal);
+  }
+
+  /**
+   * How many breaking or deprecated changes this principal has not read (SEP section 12).
+   * 0 for anonymous callers, shared credentials, and principals who turned the notice off.
+   * The first time a principal is seen, everything already published counts as read,
+   * so a new caller is not told about old deprecations.
+   */
+  async pendingChanges(principal: string | null | undefined): Promise<number> {
+    if (!this.feed || !this.hasInbox(principal)) return 0;
+    const reader = await this.feed.getReader(principal);
+    if (!reader) {
+      const newest = (await this.feed.listChanges())[0]?.seq ?? 0;
+      await this.feed.putReader({ principal, seenSeq: newest, muted: false });
+      return 0;
+    }
+    if (reader.muted) return 0;
+    const unread = await this.feed.listChanges(reader.seenSeq);
+    return unread.filter((c) => this.visibleTo(c, principal) && (c.breaking || c.type === "deprecated")).length;
+  }
+
+  /** Both notice counts at once. */
+  async notices(principal: string | null | undefined): Promise<NoticeCounts> {
+    return { updates: await this.pendingUpdates(principal), changes: await this.pendingChanges(principal) };
+  }
+
+  /**
+   * Turns the changes notice on or off for one principal (SEP section 12: the principal
+   * can turn it off). The feed itself stays readable.
+   */
+  async setChangeNotice(principal: string | null | undefined, enabled: boolean): Promise<void> {
+    if (!this.feed) throw new ChangeRequestError("invalid_params", "This server has no changes feed.");
+    const who = this.requireInbox(principal);
+    const reader = (await this.feed.getReader(who)) ?? { principal: who, seenSeq: 0, muted: false };
+    await this.feed.putReader({ ...reader, muted: !enabled });
+  }
+
+  /**
+   * The changes feed (SEP section 12): what shipped after sinceVersion or since, newest
+   * first. Needs no authenticated principal. A principal sees changes for everyone plus
+   * those released to it alone, and only its own changeRequestIds. Reading marks the
+   * feed as read for the changes notice.
+   */
+  async changes(principal: string | null | undefined, query: ChangesQuery = {}): Promise<ChangesPage> {
+    if (!this.feed) throw new ChangeRequestError("invalid_params", "This server has no changes feed.");
+    if (query.sinceVersion !== undefined && query.since !== undefined) {
+      throw new ChangeRequestError("invalid_params", "Pass sinceVersion or since, not both.");
+    }
+    if (query.sinceVersion !== undefined && (typeof query.sinceVersion !== "string" || query.sinceVersion === "")) {
+      throw new ChangeRequestError("invalid_params", "sinceVersion must be a version string.");
+    }
+    if (query.since !== undefined && (typeof query.since !== "string" || Number.isNaN(Date.parse(query.since)))) {
+      throw new ChangeRequestError("invalid_params", "since must be an ISO 8601 time.");
+    }
+    if (query.cursor !== undefined && typeof query.cursor !== "string") {
+      throw new ChangeRequestError("invalid_params", "cursor must be a string.");
+    }
+    if (query.limit !== undefined && (typeof query.limit !== "number" || !Number.isInteger(query.limit))) {
+      throw new ChangeRequestError("invalid_params", "limit must be an integer.");
+    }
+    // Shared credentials and anonymous callers see only what everyone sees.
+    const who = this.hasInbox(principal) ? principal : null;
+    const all = await this.feed.listChanges();
+    const sinceMs = query.since !== undefined ? Date.parse(query.since) : undefined;
+    const matching = all
+      .filter((c) => this.visibleTo(c, who))
+      .filter((c) => query.sinceVersion === undefined || this.compare(c.version, query.sinceVersion) > 0)
+      .filter((c) => sinceMs === undefined || Date.parse(c.publishedAt) > sinceMs)
+      .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || b.seq - a.seq);
+
+    const limit = Math.min(Math.max(query.limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+    const offset = decodeCursor(query.cursor);
+    const page: ChangesPage = {
+      currentVersion: this.currentVersion(all),
+      changes: matching.slice(offset, offset + limit).map((c) => this.toEntry(c, who)),
+    };
+    if (offset + limit < matching.length) page.nextCursor = encodeCursor(offset + limit);
+
+    if (who) {
+      const newest = all[0]?.seq ?? 0;
+      const reader = (await this.feed.getReader(who)) ?? { principal: who, seenSeq: 0, muted: false };
+      if (newest > reader.seenSeq) await this.feed.putReader({ ...reader, seenSeq: newest });
+    }
+    return page;
   }
 
   /**
@@ -292,6 +480,44 @@ export class ChangeRequestService {
     const record = typeof requestId === "string" ? await this.store.get(requestId) : null;
     if (!record) throw new ChangeRequestError("not_found", "No such request.");
     return this.toStatus(record);
+  }
+
+  /**
+   * Adds an entry to the changes feed (SEP section 12). Call it from the release
+   * script for every change a caller can observe, whether or not anyone asked for it.
+   */
+  async publishChange(input: PublishChangeInput): Promise<ChangeRecord> {
+    if (!this.feed) throw new ChangeRequestError("invalid_params", "This server has no changes feed.");
+    validateChange(input);
+    const resolves: { requestId: string; principal: string }[] = [];
+    for (const requestId of input.changeRequestIds ?? []) {
+      const record = await this.store.get(requestId);
+      if (!record) throw new ChangeRequestError("not_found", `changeRequestIds names no request: ${requestId}.`);
+      // An anonymous request has no one to show its id to.
+      if (!record.anonymous) resolves.push({ requestId, principal: record.principal });
+    }
+    const availability = input.availability ?? "all";
+    const change: Omit<ChangeRecord, "seq"> = {
+      changeId: `chg_${randomBytes(8).toString("hex")}`,
+      version: input.version,
+      publishedAt: input.publishedAt ?? this.now().toISOString(),
+      type: input.type,
+      breaking: input.type === "removed" ? true : input.breaking ?? false,
+      summary: input.summary,
+      availability,
+    };
+    if (input.changed) change.changed = input.changed;
+    if (input.changelogUri) change.changelogUri = input.changelogUri;
+    if (input.removeAfter) change.removeAfter = input.removeAfter;
+    if (resolves.length) change.resolves = resolves;
+    if (availability === "requester") {
+      const to = new Set([...(input.releasedTo ?? []), ...resolves.map((r) => r.principal)]);
+      if (to.size === 0) {
+        throw new ChangeRequestError("invalid_params", "A requester-only change needs releasedTo or changeRequestIds.");
+      }
+      change.releasedTo = [...to];
+    }
+    return this.feed.appendChange(change);
   }
 
   /** Every principal's requests, for triage and the weekly roll-up. Does not clear updates. */
@@ -411,10 +637,53 @@ export class ChangeRequestService {
   }
 
   private requirePrincipal(principal: string | null | undefined): string {
-    if (!principal) {
+    if (!principal || principal === ANONYMOUS_PRINCIPAL) {
       throw new ChangeRequestError("unauthenticated", "Change requests need an authenticated caller.");
     }
     return principal;
+  }
+
+  /** A principal that may have an inbox and notices: authenticated, not anonymous, not shared. */
+  private hasInbox(principal: string | null | undefined): principal is string {
+    return Boolean(principal) && principal !== ANONYMOUS_PRINCIPAL && !this.isShared(principal as string);
+  }
+
+  private async getByTicket(requestId: string, ticket: string): Promise<StatusObject> {
+    const record = typeof requestId === "string" ? await this.store.get(requestId) : null;
+    // A wrong ticket and an unknown id look the same, so tickets cannot be probed.
+    if (!record || !record.anonymous || !record.ticket || typeof ticket !== "string" || !sameSecret(record.ticket, ticket)) {
+      throw new ChangeRequestError("not_found", "No such request.");
+    }
+    return this.toStatus(record);
+  }
+
+  private visibleTo(change: ChangeRecord, principal: string | null): boolean {
+    if (change.availability === "all") return true;
+    return principal !== null && (change.releasedTo ?? []).includes(principal);
+  }
+
+  private toEntry(change: ChangeRecord, principal: string | null): ChangeEntry {
+    const entry: ChangeEntry = {
+      version: change.version,
+      publishedAt: change.publishedAt,
+      type: change.type,
+      breaking: change.breaking,
+      summary: change.summary,
+    };
+    if (change.changed) entry.changed = change.changed;
+    if (change.changelogUri) entry.changelogUri = change.changelogUri;
+    if (change.removeAfter) entry.removeAfter = change.removeAfter;
+    const own = principal ? (change.resolves ?? []).filter((r) => r.principal === principal).map((r) => r.requestId) : [];
+    if (own.length) entry.changeRequestIds = own;
+    return entry;
+  }
+
+  private currentVersion(feed: ChangeRecord[]): string {
+    const option = this.currentVersionOption;
+    const fromOption = typeof option === "function" ? option() : option;
+    if (fromOption) return fromOption;
+    const versions = feed.map((c) => c.version).sort((a, b) => this.compare(b, a));
+    return versions[0] ?? "0.0.0";
   }
 
   private requireInbox(principal: string | null | undefined): string {

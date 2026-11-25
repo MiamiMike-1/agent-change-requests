@@ -20,6 +20,8 @@ export interface LedgerEntry {
   updatedAt: string;
   /** Set when the server says the change shipped and the workaround is no longer needed. */
   workaroundObsolete?: boolean;
+  /** For a request filed without a signed-in principal: the ticket that reads it. A credential; never shown to the model. */
+  ticket?: string;
   /** The client's own verdict, once it has re-run its tests. */
   confirmed?: "pass" | "fail";
 }

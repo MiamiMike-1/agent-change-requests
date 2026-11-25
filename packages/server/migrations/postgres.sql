@@ -39,3 +39,21 @@ create index if not exists acr_gaps_principal_at on acr_gaps (principal, at);
 
 alter table acr_change_requests enable row level security;
 alter table acr_gaps enable row level security;
+
+-- The changes feed (SEP section 12) and how far each principal has read it.
+-- appendChange() inserts and returns the generated seq.
+create table if not exists acr_change_feed (
+  seq       bigint generated always as identity primary key,
+  change_id text not null unique,
+  -- The ChangeRecord as JSON, without seq.
+  record    jsonb not null
+);
+
+create table if not exists acr_change_feed_readers (
+  principal text primary key,
+  seen_seq  bigint not null,
+  muted     boolean not null default false
+);
+
+alter table acr_change_feed enable row level security;
+alter table acr_change_feed_readers enable row level security;

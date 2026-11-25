@@ -174,6 +174,10 @@ export interface ChangeRequestRecord {
   firstResult: SubmitResult;
   /** Set once the request was relayed to an extension's maintainers. */
   upstream?: UpstreamLink;
+  /** True when the request came from a caller with no authenticated principal. */
+  anonymous?: boolean;
+  /** Anonymous requests only: the ticket that reads this one request. A credential. */
+  ticket?: string;
   /** Bumped on every write. Stores use it to refuse a write based on a stale read. */
   revision: number;
   createdAt: string;
@@ -202,6 +206,8 @@ export interface SubmitResult {
   status: Status;
   duplicateOf: string | null;
   demand: number;
+  /** Only for anonymous callers: the bearer credential for changeRequests/get on this one request. */
+  ticket?: string;
 }
 
 export interface Gap {
@@ -234,4 +240,58 @@ export interface ChangeEvent {
   status: Status;
   stage?: Stage;
   at: string;
+}
+
+// ---- What's new (SEP section 12) --------------------------------------------
+
+export const CHANGE_TYPES = ["added", "changed", "deprecated", "removed", "fixed"] as const;
+export type ChangeType = (typeof CHANGE_TYPES)[number];
+
+/** One entry of the changes feed, as callers see it (SEP section 12). */
+export interface ChangeEntry {
+  version: string;
+  publishedAt: string;
+  type: ChangeType;
+  breaking: boolean;
+  summary: string;
+  changed?: Target[];
+  changelogUri?: string;
+  /** For deprecated entries: the earliest date the server may remove the target. */
+  removeAfter?: string;
+  /** The caller's own requests this change resolved. Never another principal's. */
+  changeRequestIds?: string[];
+}
+
+/** The stored entry. Only the server sees all of it. */
+export interface ChangeRecord extends Omit<ChangeEntry, "changeRequestIds"> {
+  changeId: string;
+  /** Increases with every published entry. Orders the feed and marks what a reader has seen. */
+  seq: number;
+  /** all: every caller sees it. requester: only the principals listed in releasedTo. */
+  availability: "all" | "requester";
+  releasedTo?: string[];
+  /** The requests this change resolved, with the principal that owns each. */
+  resolves?: { requestId: string; principal: string }[];
+}
+
+/** How far one principal has read the feed, and whether it wants the notice. */
+export interface FeedReader {
+  principal: string;
+  /** The highest seq this principal has read. */
+  seenSeq: number;
+  /** True when the principal turned the changes notice off. */
+  muted: boolean;
+}
+
+export interface ChangesQuery {
+  sinceVersion?: string;
+  since?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ChangesPage {
+  currentVersion: string;
+  changes: ChangeEntry[];
+  nextCursor?: string;
 }

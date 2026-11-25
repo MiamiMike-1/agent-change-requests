@@ -36,6 +36,7 @@ describe("installChangeRequests", () => {
       acceptanceTests: true,
       events: false,
       anonymous: false,
+      changes: true,
       policyUri: "https://example.com/policy",
     });
   });
@@ -110,5 +111,83 @@ describe("installChangeRequests", () => {
     expect(app._meta).toEqual({ [EXT]: { updates: 1 } });
     const listed = await second.call("changeRequests/list");
     expect(listed.requests[0]).toMatchObject({ requestId, status: "shipped" });
+  });
+
+  it("answers changeRequests/changes for any caller and puts the changes count in _meta and the notice", async () => {
+    const { call, client, service } = await session();
+    // Seeing the principal once sets where its unread count starts.
+    await client.callTool({ name: "ping_app", arguments: {} });
+    await service.publishChange({ version: "1.1.0", type: "added", summary: "ping_app takes a message." });
+    await service.publishChange({ version: "1.1.0", type: "deprecated", summary: "ping is deprecated.", removeAfter: "2027-02-01" });
+
+    const app = (await client.callTool({ name: "ping_app", arguments: {} })) as any;
+    expect(app._meta).toEqual({ [EXT]: { changes: 1 } });
+    expect(app.content.at(-1).text).toBe("Note from Demo: 1 change may affect your use of this server. Call whats_new to see them.");
+
+    const feed = await call("changeRequests/changes", { sinceVersion: "1.0.0" });
+    expect(feed.currentVersion).toBe("1.0.0"); // the McpServer's own version
+    expect(feed.changes.map((c: any) => c.type)).toEqual(["deprecated", "added"]);
+    expect(feed._meta).toBeUndefined(); // reading the feed cleared the count
+    await expect(call("changeRequests/changes", { sinceVersion: "1.0.0", since: "2026-01-01T00:00:00Z" })).rejects.toMatchObject({
+      code: -32602,
+      data: { reason: "invalid_params" },
+    });
+
+    const anon = await session({ getPrincipal: () => null });
+    await anon.service.publishChange({ version: "1.1.0", type: "added", summary: "Public." });
+    expect((await anon.call("changeRequests/changes")).changes).toHaveLength(1);
+  });
+
+  it("serves whats_new, which can turn the changes notice off", async () => {
+    const { client, service } = await session();
+    await client.callTool({ name: "ping_app", arguments: {} });
+    await service.publishChange({ version: "2.0.0", type: "removed", summary: "ping is gone.", changed: [{ type: "tool", name: "ping" }] });
+    const read = (await client.callTool({ name: "whats_new", arguments: { sinceVersion: "1.0.0", notify: false } })) as any;
+    expect(read.content[0].text).toContain("- 2.0.0 removed (BREAKING) [ping]: ping is gone.");
+    expect(read.structuredContent.changes).toHaveLength(1);
+    await service.publishChange({ version: "2.1.0", type: "removed", summary: "pong is gone." });
+    const app = (await client.callTool({ name: "ping_app", arguments: {} })) as any;
+    expect(app._meta).toBeUndefined();
+  });
+
+  it("sends only the _meta counts when it registers no tools the lines could name", async () => {
+    const { call, client, service } = await session({ legacyTools: false });
+    const { requestId } = await call("changeRequests/submit", request());
+    await service.transition(requestId, { status: "triaged" });
+    const app = (await client.callTool({ name: "ping_app", arguments: {} })) as any;
+    expect(app._meta).toEqual({ [EXT]: { updates: 1 } });
+    expect(app.content).toEqual([{ type: "text", text: "pong" }]);
+  });
+
+  it("leaves the feed out when the store has none", async () => {
+    const { client, call } = await session({ changes: false });
+    expect((client.getServerCapabilities() as any).extensions[EXT].changes).toBe(false);
+    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain("whats_new");
+    await expect(call("changeRequests/changes")).rejects.toMatchObject({ code: -32601 });
+  });
+
+  it("accepts anonymous callers with a ticket when turned on, and publishes no events for them", async () => {
+    const events: any[] = [];
+    const { call, client, service } = await session({ anonymous: true, getPrincipal: () => null, publishEvent: (e) => void events.push(e) });
+    expect((client.getServerCapabilities() as any).extensions[EXT].anonymous).toBe(true);
+    const filed = await call("changeRequests/submit", request());
+    expect(filed.ticket).toMatch(/^crt_/);
+    await service.transition(filed.requestId, { status: "shipped", resolution: shippedResolution });
+    expect(await call("changeRequests/get", { requestId: filed.requestId, ticket: filed.ticket })).toMatchObject({ status: "shipped" });
+    await expect(call("changeRequests/get", { requestId: filed.requestId, ticket: "crt_x" })).rejects.toMatchObject({
+      data: { reason: "not_found" },
+    });
+    await expect(call("changeRequests/list")).rejects.toMatchObject({ data: { reason: "unauthenticated" } });
+    expect(events).toEqual([]);
+
+    // The legacy tools take the ticket too.
+    const viaTool = (await client.callTool({ name: "change_requests_get", arguments: { requestId: filed.requestId, ticket: filed.ticket } })) as any;
+    expect(viaTool.structuredContent.status).toBe("shipped");
+  });
+
+  it("still refuses anonymous callers by default", async () => {
+    const { call, client } = await session({ getPrincipal: () => null });
+    expect((client.getServerCapabilities() as any).extensions[EXT].anonymous).toBe(false);
+    await expect(call("changeRequests/submit", request())).rejects.toMatchObject({ data: { reason: "unauthenticated" } });
   });
 });

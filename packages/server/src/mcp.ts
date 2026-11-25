@@ -9,9 +9,9 @@ import type { McpServer, RegisteredTool } from "@modelcontextprotocol/sdk/server
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
 import { ChangeRequestError, isChangeRequestError } from "./errors.js";
-import { applyUpdateNotice, type NoticeOptions } from "./notice.js";
+import { applyNotices, type NoticeOptions } from "./notice.js";
 import type { ChangeRequestService } from "./service.js";
-import { STATUSES } from "./types.js";
+import { STATUSES, type ChangesPage } from "./types.js";
 
 /** What the adapter needs from each tool call to work out who is calling. */
 export interface CallInfo {
@@ -77,7 +77,7 @@ function errorResult(error: unknown): ToolResult {
  * Use it on the app's own tools too: that is how an agent learns a fix shipped.
  */
 export function withUpdateNotice<A extends unknown[], R extends { content?: unknown[]; _meta?: Record<string, unknown> }>(
-  options: Pick<McpAdapterOptions, "service" | "getPrincipal" | "appName" | "extensionId" | "listToolName">,
+  options: Pick<McpAdapterOptions, "service" | "getPrincipal" | "appName" | "extensionId" | "listToolName" | "changesToolName" | "metaOnly">,
   handler: (...args: A) => Promise<R> | R,
 ): (...args: A) => Promise<R> {
   return async (...args: A) => {
@@ -86,15 +86,28 @@ export function withUpdateNotice<A extends unknown[], R extends { content?: unkn
     const call = args.at(-1) as CallInfo | undefined;
     try {
       const principal = await options.getPrincipal(call ?? {});
-      const count = await options.service.pendingUpdates(principal);
-      return applyUpdateNotice(result, count, options);
+      return applyNotices(result, await options.service.notices(principal), options);
     } catch {
       return result;
     }
   };
 }
 
-/** Registers change_requests_submit, _list, _get, _withdraw, _confirm, and _scorecard. */
+/** Readable text for one page of the changes feed. */
+export function changesText(page: ChangesPage): string {
+  if (page.changes.length === 0) return `No changes listed. Current version: ${page.currentVersion}.`;
+  const lines = [`Current version: ${page.currentVersion}. Newest first:`];
+  for (const c of page.changes) {
+    const flags = [c.breaking ? "BREAKING" : "", c.removeAfter ? `may be removed after ${c.removeAfter}` : ""].filter(Boolean).join(", ");
+    const targets = c.changed?.length ? ` [${c.changed.map((t) => t.name ?? t.type).join(", ")}]` : "";
+    const yours = c.changeRequestIds?.length ? ` Resolves your request ${c.changeRequestIds.join(", ")}.` : "";
+    lines.push(`- ${c.version} ${c.type}${flags ? ` (${flags})` : ""}${targets}: ${c.summary}${yours}`);
+  }
+  if (page.nextCursor) lines.push(`More: call again with cursor ${page.nextCursor}.`);
+  return lines.join("\n");
+}
+
+/** Registers change_requests_submit, _list, _get, _withdraw, _confirm, _scorecard, and whats_new when the server has a changes feed. */
 export function registerChangeRequestTools(server: McpServer, options: McpAdapterOptions): Record<string, RegisteredTool> {
   const { service, appName } = options;
   const tools: Record<string, RegisteredTool> = {};
@@ -109,7 +122,7 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
       result = errorResult(error);
     }
     try {
-      return applyUpdateNotice(result, await service.pendingUpdates(principal), options);
+      return applyNotices(result, await service.notices(principal), options);
     } catch {
       return result;
     }
@@ -175,6 +188,9 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
         "Describe what you were trying to do and what would have helped. Include an acceptance test when you can: the exact call you wanted and the result you expected.",
         "Never include credentials, personal data, the user's own words, resource contents, or file paths; use made-up example values.",
         "Send a new idempotencyKey for each new request. Returns a requestId: check it later with change_requests_list.",
+        service.anonymous
+          ? "Without a signed-in account you also get a ticket: keep it, because only change_requests_get with that ticket can read the request."
+          : "",
         options.submitGuidance ?? "",
       ]
         .join(" ")
@@ -210,10 +226,18 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
   tools["change_requests_get"] = server.registerTool(
     "change_requests_get",
     {
-      description: "Read the current status of one of your change requests by requestId.",
-      inputSchema: { requestId: z.string().describe("The requestId that change_requests_submit returned.") },
+      description: service.anonymous
+        ? "Read the current status of one of your change requests by requestId. If you filed it without a signed-in account, pass the ticket you got back."
+        : "Read the current status of one of your change requests by requestId.",
+      inputSchema: {
+        requestId: z.string().describe("The requestId that change_requests_submit returned."),
+        ...(service.anonymous
+          ? { ticket: z.string().optional().describe("The ticket change_requests_submit returned, for a request filed without a signed-in account.") }
+          : {}),
+      },
     },
-    async (args, extra) => run(extra, async (principal) => ok({ ...(await service.get(principal, args.requestId)) })),
+    async (args, extra) =>
+      run(extra, async (principal) => ok({ ...(await service.get(principal, args.requestId, (args as { ticket?: string }).ticket)) })),
   );
 
   tools["change_requests_withdraw"] = server.registerTool(
@@ -262,5 +286,31 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
         return ok({ ledger: card.ledger, numbers: card.numbers, markdown: card.markdown } as unknown as Record<string, unknown>);
       }),
   );
+  if (service.changesEnabled) {
+    tools["whats_new"] = server.registerTool(
+      "whats_new",
+      {
+        description: `What ${appName} has shipped: new tools, changed behavior, deprecations, and removals, newest first. Pass the version you last saw as sinceVersion (or a time as since) to see only what came after. Call it when a result says changes may affect you, and before relying on a tool you have not used in a while. Entries marked BREAKING can make a call that worked before fail.`,
+        inputSchema: {
+          sinceVersion: z.string().optional().describe("Only changes after this version."),
+          since: z.string().optional().describe("Only changes published after this ISO 8601 time."),
+          limit: z.number().int().min(1).max(50).optional().describe("Page size, at most 50."),
+          cursor: z.string().optional().describe("nextCursor from the previous page."),
+          notify: z
+            .boolean()
+            .optional()
+            .describe("Only when the user asks: false stops the note about breaking changes and deprecations on tool results, true turns it back on."),
+        },
+        annotations: { readOnlyHint: false },
+      },
+      async (args, extra) =>
+        run(extra, async (principal) => {
+          const { notify, ...query } = args;
+          if (notify !== undefined) await service.setChangeNotice(principal, notify);
+          const page = await service.changes(principal, query);
+          return ok({ ...page } as unknown as Record<string, unknown>, changesText(page));
+        }),
+    );
+  }
   return tools;
 }

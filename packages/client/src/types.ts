@@ -105,3 +105,33 @@ export interface ConfirmParams {
   note?: string;
   [key: string]: unknown;
 }
+
+/** One entry of the changes feed (SEP section 12). */
+export interface ChangeEntry {
+  version: string;
+  publishedAt: string;
+  type: "added" | "changed" | "deprecated" | "removed" | "fixed";
+  breaking: boolean;
+  summary: string;
+  changed?: Target[];
+  changelogUri?: string;
+  removeAfter?: string;
+  /** The caller's own requests this change resolved. */
+  changeRequestIds?: string[];
+  [key: string]: unknown;
+}
+
+/** changeRequests/changes params. Pass sinceVersion or since, not both. */
+export interface ChangesQuery {
+  sinceVersion?: string;
+  since?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** changeRequests/changes result. */
+export interface ChangesPage {
+  currentVersion: string;
+  changes: ChangeEntry[];
+  nextCursor?: string;
+}

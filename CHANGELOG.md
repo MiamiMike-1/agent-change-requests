@@ -24,6 +24,7 @@ The three parts the SEP's Reference Implementation section plans, built on `@mod
 **Demo**
 
 - `packages/demo`: an invoices server whose `list_invoices` cannot filter by customer in 1.0.0 and can in 1.1.0. `npm run demo` runs the loop from the gap to a confirmed shipped change and writes a transcript. CI runs it on every pull request.
+- `packages/demo/recordings/claude-code-2026-11-25`: a recorded run with a real model (Claude Code, headless), from an unprompted request against 1.0.0 to a `pass` confirmation on 1.1.0, with findings. `scripts/record-claude.sh` records a new one.
 
 ## Spec draft: reference implementation status (November 25, 2026)
 

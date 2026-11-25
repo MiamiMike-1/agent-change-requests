@@ -448,12 +448,13 @@ The extension process requires at least one reference implementation in an offic
    - It reads the inbox when a response carries an update count, and records shipped results where a later session will find them.
    - It re-runs its own acceptance tests and confirms the outcome.
 3. **A demonstration server.** [`packages/demo`](packages/demo) has one tool with a deliberate gap: `list_invoices` cannot filter by customer in version 1.0.0. A scripted run files a request with an acceptance test, ships the fix in 1.1.0, and then a second session collects the `shipped` status, re-runs the test, confirms `pass`, and drops its workaround. The run is part of CI.
+4. **A recorded run with a real model.** [`packages/demo/recordings/claude-code-2026-11-25`](packages/demo/recordings/claude-code-2026-11-25) has three headless Claude Code sessions against the demo over stdio, from the gap through a `pass` confirmation, with the findings.
 
 Tasker's MCP server, the source of the evidence in the README, has implemented the draft since Tasker MCP 1.3.0 under the vendor prefix `com.rocketproforma/change-requests`.
 
 **What is still missing.**
 
-- A recorded run with a real model. The demo runs a scripted agent, but its server also runs over stdio, so a real agent can be pointed at it.
+- A recorded run that closes the loop on the notice alone. In the [recorded Claude Code run](packages/demo/recordings/claude-code-2026-11-25), the model filed a request unprompted and, once told which request it had filed, confirmed the shipped fix. Without that hint it never saw the update notice, because the client showed the model the tool's structured content in place of its text (see Open Questions).
 - The changes feed (Section 12).
 - Anonymous callers and tickets. The server package does not accept them.
 - Delivery over the Events extension, which waits on an Events implementation in the SDK.
@@ -493,3 +494,4 @@ The packages and the demo use a vendor prefix until the identifier is approved.
 - Should a change entry say how to migrate, for example by naming the replacement tool in a structured field, rather than only in `summary`?
 - Should the extension define a standard export of aggregate figures (requests, shipped, confirmed, median time to ship), so that registries can publish comparable responsiveness scores?
 - Should this extension and the Discussion #2369 proposal merge, with anonymous session observations and identified requests as two modes of one `feedback` capability? This draft uses its own namespace so that either outcome stays open.
+- How should the update notice reach a client that shows the model a tool's `structuredContent` instead of its text? The recorded Claude Code run hit this: the notice line was on the result but never reached the model, and the server cannot add it to structured content without breaking the tool's `outputSchema`. Options include making it a client duty to show the model the `_meta` count, or accepting that such clients rely on their own memory of open requests.

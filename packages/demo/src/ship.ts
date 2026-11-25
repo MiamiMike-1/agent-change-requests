@@ -2,7 +2,8 @@
 /**
  * The build side of the demo: what a vendor's CI or release script does once the fix
  * is merged. It moves every open request about list_invoices to shipped, with the
- * version the fix is live in, and records the build stages for the scorecard.
+ * version the fix is live in, records the build stages for the scorecard, and
+ * publishes the change to the changes feed (SEP section 12).
  *
  *   node dist/ship.js [path/to/requests.db] [version]
  */
@@ -42,6 +43,18 @@ export async function shipFix(storePath: string, version = FIXED_IN): Promise<st
       },
     });
     shipped.push(request.requestId);
+  }
+  // One feed entry for everyone, asked for or not. Each requester also sees its own request id on it.
+  // Running the script twice publishes the entry once.
+  const published = await service.changes(null);
+  if (!published.changes.some((c) => c.version === version && c.type === "added")) {
+    await service.publishChange({
+      version,
+      type: "added",
+      summary: "list_invoices can now filter by customer_id and status.",
+      changed: [{ type: "tool", name: "list_invoices" }],
+      changeRequestIds: shipped,
+    });
   }
   return shipped;
 }

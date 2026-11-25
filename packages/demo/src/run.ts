@@ -8,13 +8,21 @@
  * The vendor ships the fix in 1.1.0.
  * Session 2 (server 1.1.0, a new connection): any tool result says an update is waiting,
  * the client reads its inbox, finds the request shipped, re-runs its acceptance test,
- * confirms pass, and the agent drops its workaround.
+ * confirms pass, and the agent drops its workaround. The client also reads the changes
+ * feed from the version it last saw, and finds the same fix listed for everyone.
  *
  *   node dist/run.js [state directory]
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ChangeRequestsClient, FileLedger, changeRequestsCapabilities, runAcceptanceTest } from "@agent-change-requests/client";
+import {
+  ChangeRequestsClient,
+  ChangesFeed,
+  FileChangesLedger,
+  FileLedger,
+  changeRequestsCapabilities,
+  runAcceptanceTest,
+} from "@agent-change-requests/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { EXTENSION_ID, FIXED_IN, createInvoiceServer, type Invoice } from "./server.js";
@@ -35,6 +43,8 @@ export interface DemoResult {
   total: number;
   testBeforeFix: "pass" | "fail";
   confirmation: "pass" | "fail";
+  /** What the changes feed listed in session 2, since the version session 1 saw. */
+  changesSeen: { version: string; type: string; changeRequestIds?: string[] }[];
   transcript: string;
 }
 
@@ -74,6 +84,7 @@ export async function runDemo(dir: string, principal = "demo-user"): Promise<Dem
   const lines: string[] = [];
   const say = (line = "") => lines.push(line);
   const ledger = new FileLedger(join(dir, "ledger.json"));
+  const changesLedger = new FileChangesLedger(join(dir, "changes.json"));
 
   // ---- Session 1 -----------------------------------------------------------
   say(`## Session 1: server 1.0.0`);
@@ -90,6 +101,9 @@ export async function runDemo(dir: string, principal = "demo-user"): Promise<Dem
   const tools1 = (await s1.client.listTools()).tools.map((t) => t.name);
   say(`Tools the model sees from the server: ${tools1.join(", ")} (no change_requests_submit, since this client has the extension).`);
   say(`Tool the client adds for the model: ${cr1.submissionTool().name}`);
+  const feed1 = new ChangesFeed(s1.client, { extensionId: EXTENSION_ID, ledger: changesLedger, targets: ["list_invoices"] });
+  const seen1 = await feed1.check();
+  say(`The client reads the changes feed once and remembers the version: ${seen1.currentVersion}, ${seen1.changes.length} changes listed.`);
   say();
   say(`Task: total the unpaid invoices of ${CUSTOMER} (for Acme Corp).`);
 
@@ -172,6 +186,14 @@ export async function runDemo(dir: string, principal = "demo-user"): Promise<Dem
   const confirmed = await cr2.retestAndConfirm(requestId);
   say(`The client re-runs its acceptance test under its own authorization: ${confirmed.outcome}. It confirms ${confirmed.outcome} to the server.`);
 
+  const feed2 = new ChangesFeed(s2.client, { extensionId: EXTENSION_ID, ledger: changesLedger, targets: ["list_invoices"] });
+  const news = await feed2.check();
+  say(
+    `The client reads the changes feed since ${seen1.currentVersion}: ${news.changes
+      .map((c) => `${c.version} ${c.type}: "${c.summary}" (your request ${c.changeRequestIds?.join(", ") ?? "none"})`)
+      .join("; ")}. Now at ${news.currentVersion}.`,
+  );
+
   const fixedResult = (await s2.client.callTool({
     name: "list_invoices",
     arguments: { customer_id: CUSTOMER, status: "unpaid" },
@@ -196,6 +218,7 @@ export async function runDemo(dir: string, principal = "demo-user"): Promise<Dem
     total,
     testBeforeFix: before.outcome,
     confirmation: confirmed.outcome,
+    changesSeen: news.changes.map((c) => ({ version: c.version, type: c.type, ...(c.changeRequestIds ? { changeRequestIds: c.changeRequestIds } : {}) })),
     transcript: lines.join("\n"),
   };
 }

@@ -5,10 +5,12 @@
  *   import { describe, it } from "vitest";
  *   import { runStoreConformance } from "@agent-change-requests/server/testing";
  *   runStoreConformance({ describe, it }, () => new MyStore(freshDb()));
+ *
+ * A store that also keeps the changes feed runs runFeedStoreConformance the same way.
  */
 import assert from "node:assert/strict";
 import { checkHealth } from "../health.js";
-import type { ChangeRequestStore } from "../store.js";
+import type { ChangeFeedStore, ChangeRequestStore } from "../store.js";
 import type { ChangeRequestRecord } from "../types.js";
 
 export interface TestApi {
@@ -158,6 +160,58 @@ export function runStoreConformance(t: TestApi, makeStore: () => ChangeRequestSt
       await store.insert(sampleRecord());
       assert.deepEqual(await checkHealth({ store, onError }), { ok: true, store: "reachable" });
       assert.deepEqual(errors, []);
+    });
+  });
+}
+
+export function runFeedStoreConformance(t: TestApi, makeStore: () => ChangeFeedStore | Promise<ChangeFeedStore>): void {
+  const entry = (changeId: string, overrides: Record<string, unknown> = {}) => ({
+    changeId,
+    version: "1.1.0",
+    publishedAt: "2026-01-05T12:00:00.000Z",
+    type: "added" as const,
+    breaking: false,
+    summary: `Change ${changeId}.`,
+    availability: "all" as const,
+    ...overrides,
+  });
+
+  t.describe("ChangeFeedStore conformance", () => {
+    t.it("gives each entry a higher seq and round-trips it unchanged", async () => {
+      const store = await makeStore();
+      const a = await store.appendChange(entry("chg_a"));
+      const b = await store.appendChange(
+        entry("chg_b", {
+          type: "deprecated",
+          removeAfter: "2027-02-01",
+          changed: [{ type: "tool", name: "export_csv" }],
+          availability: "requester",
+          releasedTo: ["user_a"],
+          resolves: [{ requestId: "crq_1", principal: "user_a" }],
+        }),
+      );
+      assert.ok(b.seq > a.seq);
+      assert.deepEqual(await store.listChanges(), [b, a]);
+    });
+
+    t.it("lists only entries after a seq, highest first", async () => {
+      const store = await makeStore();
+      const a = await store.appendChange(entry("chg_a"));
+      const b = await store.appendChange(entry("chg_b"));
+      const c = await store.appendChange(entry("chg_c"));
+      assert.deepEqual((await store.listChanges(a.seq)).map((x) => x.changeId), ["chg_c", "chg_b"]);
+      assert.deepEqual(await store.listChanges(c.seq), []);
+      assert.equal(b.changeId, "chg_b");
+    });
+
+    t.it("keeps one reader row per principal", async () => {
+      const store = await makeStore();
+      assert.equal(await store.getReader("user_a"), null);
+      await store.putReader({ principal: "user_a", seenSeq: 3, muted: false });
+      await store.putReader({ principal: "user_a", seenSeq: 5, muted: true });
+      await store.putReader({ principal: "user_b", seenSeq: 1, muted: false });
+      assert.deepEqual(await store.getReader("user_a"), { principal: "user_a", seenSeq: 5, muted: true });
+      assert.deepEqual(await store.getReader("user_b"), { principal: "user_b", seenSeq: 1, muted: false });
     });
   });
 }

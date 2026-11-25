@@ -1,5 +1,26 @@
 # Changelog
 
+## Changes feed and anonymous callers (November 25, 2026)
+
+The last two protocol pieces the SEP's Reference Implementation section listed as missing.
+
+**Server package 0.4.0**
+
+- The changes feed (SEP section 12). `service.publishChange()` adds an entry from a release script; `changeRequests/changes` and a new `whats_new` tool return what shipped after `sinceVersion` or `since`, newest first, with `currentVersion` (the `McpServer`'s version by default). The feed needs no signed-in caller. Requester-only entries and `changeRequestIds` are shown only to their owners. `removed` entries are always breaking.
+- The changes notice: `{ "changes": <count> }` in `_meta`, and the line "N changes may affect your use of this server. Call whats_new to see them.", for unread breaking and deprecated entries. Reading the feed clears it, a principal's first call sets where it starts, and `whats_new` with `notify: false` turns it off.
+- The settings object now carries `changes: true`. `SqliteStore` and `MemoryStore` implement the new `ChangeFeedStore`; `migrations/postgres.sql` adds its two tables, and `runFeedStoreConformance` tests other stores.
+- Anonymous callers (SEP section 3), off by default. With `anonymous: true`, a caller without a principal can submit and gets a `ticket`, a bearer credential for `changeRequests/get` (and `change_requests_get`) on that one request. No inbox, notice, withdraw, confirmation, or status events for them. They share one daily cap (`anonymousDailyCap`, default 50) and count as one principal toward demand.
+- With `legacyTools: false` the notice is sent as `_meta` counts only, since there is no tool the lines could name (SEP section 7).
+- New exports: `applyNotices`, `changesNoticeLine`, `noticeMeta`, `compareVersions`, `ANONYMOUS_PRINCIPAL`, `isChangeFeedStore`, `validateChange`.
+
+**Client**
+
+- New `ChangesFeed`: reads the feed from the version the client last saw, records breaking and deprecated entries about the targets it uses in a ledger that outlives the session, calls `onChange` for each, and gives the model one `whats_new` tool. `changesCount()` reads the count from `_meta` or the text line.
+
+**Demo**
+
+- The release script publishes the 1.1.0 fix to the changes feed, and session 2 finds it there with its own request id.
+
 ## Reference implementation (November 25, 2026)
 
 The three parts the SEP's Reference Implementation section plans, built on `@modelcontextprotocol/sdk` 1.x.

@@ -433,14 +433,16 @@ The extension process requires at least one reference implementation in an offic
 
 **What exists today.** The plan has three parts, and each now has a working prototype (MIT):
 
-1. **Server middleware.** [`@agent-change-requests/server`](packages/server) 0.3.0. One call, `installChangeRequests(server, options)`, adds the extension to any `McpServer`:
+1. **Server middleware.** [`@agent-change-requests/server`](packages/server) 0.4.0. One call, `installChangeRequests(server, options)`, adds the extension to any `McpServer`:
    - It advertises the Section 1 settings object under `capabilities.extensions`, in the `initialize` result, because SDK 1.x has no `server/discover` yet.
-   - It answers `changeRequests/submit`, `/get`, `/list`, `/withdraw`, and `/confirm`, with the error reasons in Section 10.
+   - It answers `changeRequests/submit`, `/get`, `/list`, `/withdraw`, `/confirm`, and `/changes`, with the error reasons in Section 10.
    - It stores requests in SQLite, with idempotency keys and a daily cap per principal. A store interface, a conformance suite, and a Postgres schema cover other databases.
    - It applies the lifecycle in Section 5 and the principal-scoped inbox in Section 7. The update notice goes into each result's `_meta` and, as one line of text, onto every tool result. Shared credentials get no inbox.
    - It publishes a `changeRequest.updated` event with the status object on every status change (Section 8). The SDK has no Events implementation, so delivery is left to the server's own.
    - It records confirmation as in Section 11, kept apart from the server's own `shipped`.
-   - It keeps six tools (`change_requests_submit`, `_list`, `_get`, `_withdraw`, `_confirm`, and `_scorecard`) for clients without the extension. Clients that advertise the extension don't see the submit tool, as Backward Compatibility recommends.
+   - It keeps the changes feed in Section 12 and advertises `changes: true`. A release script publishes each entry; the feed answers `sinceVersion` or `since` for any caller, shows each principal only its own `changeRequestIds`, and adds `{ "changes": <count> }` and one fixed line for unread `breaking` and `deprecated` entries. A principal's first call sets where its count starts, and the principal can turn the notice off.
+   - It accepts anonymous callers when the server turns `anonymous` on (Section 3). Each submission returns a `ticket` that reads that one request through `changeRequests/get`. Anonymous callers get no inbox, notice, confirmation, or status events, and they share one daily cap and count as one principal toward `demand`, so turning them on cannot inflate demand.
+   - It keeps seven tools (`change_requests_submit`, `_list`, `_get`, `_withdraw`, `_confirm`, `_scorecard`, and `whats_new`) for clients without the extension. When the server registers none of them, it sends the notice counts in `_meta` only, since the lines would name a tool the client cannot call. Clients that advertise the extension don't see the submit tool, as Backward Compatibility recommends.
 2. **Client support.** [`@agent-change-requests/client`](packages/client) 0.1.0 wraps the SDK's `Client`:
    - It advertises the extension only with consent, and never from an ephemeral session.
    - It gives the model one submission tool, with a description the client writes.
@@ -448,7 +450,8 @@ The extension process requires at least one reference implementation in an offic
    - It caps submissions per day and does not file a second request for a gap that is already open.
    - It reads the inbox when a response carries an update count, and records shipped results where a later session will find them.
    - It re-runs its own acceptance tests and confirms the outcome.
-3. **A demonstration server.** [`packages/demo`](packages/demo) has one tool with a deliberate gap: `list_invoices` cannot filter by customer in version 1.0.0. A scripted run files a request with an acceptance test, ships the fix in 1.1.0, and then a second session collects the `shipped` status, re-runs the test, confirms `pass`, and drops its workaround. The run is part of CI.
+   - It reads the changes feed from the version it last saw, records `breaking` and `deprecated` entries about the targets it uses where a later session will find them, and offers the model one `whats_new` tool.
+3. **A demonstration server.** [`packages/demo`](packages/demo) has one tool with a deliberate gap: `list_invoices` cannot filter by customer in version 1.0.0. A scripted run files a request with an acceptance test, ships the fix in 1.1.0 and publishes it to the changes feed, and then a second session collects the `shipped` status, re-runs the test, confirms `pass`, finds the fix in the feed with its own request id on it, and drops its workaround. The run is part of CI.
 4. **A recorded run with a real model.** [`packages/demo/recordings/claude-code-2026-11-25`](packages/demo/recordings/claude-code-2026-11-25) has three headless Claude Code sessions against the demo over stdio, from the gap through a `pass` confirmation, with the findings.
 
 Tasker's MCP server, the source of the evidence in the README, has implemented the draft since Tasker MCP 1.3.0 under the vendor prefix `com.rocketproforma/change-requests`.
@@ -456,8 +459,7 @@ Tasker's MCP server, the source of the evidence in the README, has implemented t
 **What is still missing.**
 
 - A recorded run that closes the loop on the notice alone. In the [recorded Claude Code run](packages/demo/recordings/claude-code-2026-11-25), the model filed a request unprompted and, once told which request it had filed, confirmed the shipped fix. Without that hint it never saw the update notice, because the client showed the model the tool's structured content in place of its text. Section 7 now makes carrying the notice in that case a client duty, and no client in the run implements it yet.
-- The changes feed (Section 12).
-- Anonymous callers and tickets. The server package does not accept them.
+- Client support for anonymous tickets. The client package does not yet keep a ticket in its ledger, so a later session of an anonymous client cannot read the request.
 - Delivery over the Events extension, which waits on an Events implementation in the SDK.
 - A move into the official SDK, or a form the SDK maintainers accept.
 

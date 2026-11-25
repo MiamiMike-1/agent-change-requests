@@ -30,8 +30,8 @@ npm run demo --workspace packages/demo
 The run writes `demo-state/transcript.md`. A scripted agent stands in for the model, so the run is the same every time:
 
 1. **Session 1, server 1.0.0.** The agent pages through every invoice (5 calls) to total one customer's unpaid invoices. Its acceptance test fails against 1.0.0. It files a request through the client's `file_change_request` tool; the client redacts the customer's company name before sending. A second attempt to file the same gap is caught by the client.
-2. **The vendor ships 1.1.0.** [`src/ship.ts`](src/ship.ts), standing in for a release script, moves the request to `shipped` with `workaroundObsolete: true`.
-3. **Session 2, server 1.1.0, a new connection.** The first tool result carries the update count. The client reads its inbox, records that the workaround is obsolete, re-runs its acceptance test (pass), and confirms. The agent now gets the same total in one call.
+2. **The vendor ships 1.1.0.** [`src/ship.ts`](src/ship.ts), standing in for a release script, moves the request to `shipped` with `workaroundObsolete: true`, and publishes a `1.1.0 added` entry to the changes feed that names the request.
+3. **Session 2, server 1.1.0, a new connection.** The first tool result carries the update count. The client reads its inbox, records that the workaround is obsolete, re-runs its acceptance test (pass), and confirms. It also reads the changes feed from the version it saw in session 1 and finds the fix listed, with its own request id on it. The agent now gets the same total in one call.
 
 `npm test --workspace packages/demo` runs the same loop and checks each step.
 

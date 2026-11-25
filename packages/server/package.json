@@ -1,6 +1,6 @@
 {
   "name": "@agent-change-requests/server",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Server-side implementation of the Agent Change Requests extension: the changeRequests/* protocol methods as McpServer middleware, a SQLite store, request rules, lifecycle, principal-scoped inbox, status events, confirmations, scorecard, and MCP tools.",
   "license": "MIT",
   "repository": {

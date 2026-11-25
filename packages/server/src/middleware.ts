@@ -3,9 +3,11 @@
  *
  * installChangeRequests() adds the extension to an existing server in one call:
  * - advertises it under capabilities.extensions (SEP section 1),
- * - answers changeRequests/submit, /get, /list, /withdraw, and /confirm (section 2),
+ * - answers changeRequests/submit, /get, /list, /withdraw, /confirm, and /changes (section 2),
+ * - accepts anonymous callers with tickets, when turned on (section 3),
  * - stores requests in SQLite (or any ChangeRequestStore), with idempotency keys,
  * - keeps the principal-scoped inbox and puts the update notice on every tool result (section 7),
+ * - keeps the changes feed and its notice (section 12),
  * - publishes changeRequest.updated on every status change, through the server's
  *   Events implementation (section 8),
  * - keeps the change_requests_* tools for clients that do not implement the extension,
@@ -16,7 +18,8 @@ import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { isChangeRequestError } from "./errors.js";
 import { registerChangeRequestTools, withUpdateNotice, type CallInfo, type McpAdapterOptions } from "./mcp.js";
-import { ChangeRequestService, type ServiceOptions } from "./service.js";
+import { noticeMeta } from "./notice.js";
+import { ANONYMOUS_PRINCIPAL, ChangeRequestService, type ServiceOptions } from "./service.js";
 import { SqliteStore } from "./sqlite.js";
 import type { ChangeRequestStore } from "./store.js";
 import { STATUSES, type Kind, type StatusObject } from "./types.js";
@@ -33,6 +36,7 @@ export const METHODS = {
   list: "changeRequests/list",
   withdraw: "changeRequests/withdraw",
   confirm: "changeRequests/confirm",
+  changes: "changeRequests/changes",
 } as const;
 
 /** The server settings object from SEP section 1. */
@@ -40,9 +44,10 @@ export interface ServerExtensionSettings {
   kinds: Kind[];
   acceptanceTests: boolean;
   events: boolean;
-  anonymous: false;
+  anonymous: boolean;
   policyUri?: string;
   changelogUri?: string;
+  changes: boolean;
 }
 
 /** One changeRequest.updated event, for the server's Events implementation to deliver. */
@@ -97,6 +102,7 @@ export interface ChangeRequestsOptions extends Omit<ServiceOptions, "store"> {
   /** An existing service to use instead of building one from store. */
   service?: ChangeRequestService;
   policyUri?: string;
+  /** A page listing shipped changes. Recommended when the changes feed is on (SEP section 12). */
   changelogUri?: string;
   /**
    * Hand status events to the server's Events extension. Setting this advertises
@@ -150,9 +156,13 @@ function stringParam(params: Record<string, unknown>, name: string): string {
  * carry the update notice.
  */
 export function installChangeRequests(server: McpServer, options: ChangeRequestsOptions): InstalledChangeRequests {
+  const low = server.server;
+  // The server's own version is the feed's currentVersion unless the app says otherwise.
+  const serverVersion = (low as unknown as { _serverInfo?: { version?: string } })._serverInfo?.version;
   const service =
     options.service ??
     new ChangeRequestService({
+      ...(serverVersion ? { currentVersion: serverVersion } : {}),
       ...options,
       store:
         options.store === undefined || typeof options.store === "string"
@@ -164,12 +174,12 @@ export function installChangeRequests(server: McpServer, options: ChangeRequests
     kinds: [...service.kinds],
     acceptanceTests: service.acceptanceTests,
     events: Boolean(options.publishEvent),
-    anonymous: false,
+    anonymous: service.anonymous,
+    changes: service.changesEnabled,
   };
   if (options.policyUri) settings.policyUri = options.policyUri;
   if (options.changelogUri) settings.changelogUri = options.changelogUri;
 
-  const low = server.server;
   low.registerCapabilities({ extensions: { [options.extensionId]: settings } } as never);
 
   const clientSupports = (call?: { _meta?: Record<string, unknown> }): boolean => {
@@ -187,6 +197,8 @@ export function installChangeRequests(server: McpServer, options: ChangeRequests
   };
   if (options.submitGuidance) adapter.submitGuidance = options.submitGuidance;
   if (options.timeZone) adapter.timeZone = options.timeZone;
+  // With no tools, there is nothing the notice lines could name: send only the _meta counts.
+  if (options.legacyTools === false) adapter.metaOnly = true;
 
   // ---- Protocol methods ---------------------------------------------------
 
@@ -198,8 +210,8 @@ export function installChangeRequests(server: McpServer, options: ChangeRequests
       try {
         const principal = await options.getPrincipal(extra as CallInfo);
         const result = await fn(principal, withoutMeta(request.params));
-        const updates = await service.pendingUpdates(principal);
-        return updates > 0 ? { ...result, _meta: { [options.extensionId]: { updates } } } : result;
+        const meta = noticeMeta(await service.notices(principal));
+        return meta ? { ...result, _meta: { [options.extensionId]: meta } } : result;
       } catch (error) {
         throw toMcpError(error);
       }
@@ -207,7 +219,13 @@ export function installChangeRequests(server: McpServer, options: ChangeRequests
   };
 
   handle(METHODS.submit, async (principal, params) => ({ ...(await service.submit(principal, params)) }));
-  handle(METHODS.get, async (principal, params) => ({ ...(await service.get(principal, stringParam(params, "requestId"))) }));
+  handle(METHODS.get, async (principal, params) => {
+    const ticket = params.ticket;
+    if (ticket !== undefined && typeof ticket !== "string") {
+      throw new McpError(-32602, "ticket must be a string.", { reason: "invalid_params" });
+    }
+    return { ...(await service.get(principal, stringParam(params, "requestId"), ticket)) };
+  });
   handle(METHODS.list, async (principal, params) => {
     const page = await service.list(principal, params);
     return { requests: page.items, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
@@ -219,12 +237,18 @@ export function installChangeRequests(server: McpServer, options: ChangeRequests
     ...(await service.confirm(principal, { ...params, requestId: stringParam(params, "requestId") } as never)),
   }));
 
+  if (service.changesEnabled) {
+    handle(METHODS.changes, async (principal, params) => ({ ...(await service.changes(principal, params)) }));
+  }
+
   // ---- Status events --------------------------------------------------------
 
   if (options.publishEvent) {
     const publish = options.publishEvent;
     service.subscribe(async (event) => {
       if (event.type !== "status_changed" && event.type !== "withdrawn") return;
+      // Anonymous requests have no principal to deliver to (SEP section 7).
+      if (event.principal === ANONYMOUS_PRINCIPAL) return;
       await publish({
         type: CHANGE_REQUEST_UPDATED,
         principal: event.principal,

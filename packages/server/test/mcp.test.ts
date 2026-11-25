@@ -29,7 +29,7 @@ async function connect(principal: string | null) {
 type Result = { content: { type: string; text: string }[]; structuredContent?: any; isError?: boolean; _meta?: any };
 
 describe("MCP adapter", () => {
-  it("registers the six change request tools", async () => {
+  it("registers the six change request tools and whats_new", async () => {
     const { client } = await connect("user_a");
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual([
@@ -40,6 +40,7 @@ describe("MCP adapter", () => {
       "change_requests_submit",
       "change_requests_withdraw",
       "list_things",
+      "whats_new",
     ]);
   });
 

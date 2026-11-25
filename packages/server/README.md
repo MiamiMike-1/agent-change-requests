@@ -4,7 +4,7 @@ Server side of the [Agent Change Requests extension](../../SEP-0000-agent-change
 
 It handles the parts every server needs the same way:
 
-- **Protocol methods:** `changeRequests/submit`, `/get`, `/list`, `/withdraw`, and `/confirm` as middleware for `McpServer`, advertised under `capabilities.extensions`, in one call.
+- **Protocol methods:** `changeRequests/submit`, `/get`, `/list`, `/withdraw`, `/confirm`, and `/changes` as middleware for `McpServer`, advertised under `capabilities.extensions`, in one call.
 - **SQLite store:** `SqliteStore` on `node:sqlite` (Node 22.5 and later) or `better-sqlite3`, so requests outlive the session that filed them.
 - **Status events:** `changeRequest.updated` with the status object, handed to your Events implementation on every status change.
 
@@ -12,10 +12,12 @@ It handles the parts every server needs the same way:
 - **Lifecycle:** `received` through `shipped`, with terminal statuses that never move again.
 - **Inbox:** requests belong to the authenticated caller, not the session. Any later session collects the answer.
 - **Update notice:** a count in `_meta` and one plain line of text on every tool result while an update is unread.
+- **What's new:** a version-keyed changes feed (SEP section 12) of everything the server ships, whoever asked for it, with a notice for unread breaking changes and deprecations that each caller can turn off.
+- **Anonymous callers (opt in):** requests without a signed-in principal, each answered with a ticket that reads that one request.
 - **Confirmation:** the requester's own verdict on a shipped change, kept separately from the server's claim, plus whether it adopted the change.
 - **Scorecard:** each request's stages and times, and the running numbers (time to live, build time, human time, confirmed fix rate, adoption, gaps).
 - **Health check:** a route that needs no credential and says whether the server can reach its store, without returning any data.
-- **MCP tools:** `change_requests_submit`, `_list`, `_get`, `_withdraw`, `_confirm`, and `_scorecard` on any `McpServer` from `@modelcontextprotocol/sdk`.
+- **MCP tools:** `change_requests_submit`, `_list`, `_get`, `_withdraw`, `_confirm`, `_scorecard`, and `whats_new` on any `McpServer` from `@modelcontextprotocol/sdk`.
 
 ## What your app supplies
 
@@ -24,7 +26,7 @@ It handles the parts every server needs the same way:
 | Storage | A `ChangeRequestStore`. `SqliteStore` (from `@agent-change-requests/server/sqlite`) works out of the box; `MemoryStore` is included for tests. For Postgres or Supabase, apply [`migrations/postgres.sql`](migrations/postgres.sql) and implement the interface against it, then run the conformance suite. `update()` must write only when the stored `revision` matches, so two writers never overwrite each other. |
 | Auth | `getPrincipal(call)`: the user or account the server already authenticates. Return `null` when there is none. Never a session id, and never an OAuth client id, which every user of that client shares. |
 | Notify | `onEvent(event)`: called on every submit, status change, stage, confirmation, and withdrawal. Use it to tell whoever builds changes, or to publish MCP Events. |
-| Build side | Call `transition()` when a request is triaged, planned, built, shipped, or declined, and `recordStage()` when it is approved, gets a pull request, merges, publishes, and goes live. A CI or release script is the natural place. |
+| Build side | Call `transition()` when a request is triaged, planned, built, shipped, or declined, and `recordStage()` when it is approved, gets a pull request, merges, publishes, and goes live. Call `publishChange()` for every change a caller can observe, asked for or not. A CI or release script is the natural place. |
 | Settings | `appName`, `extensionId` (a vendor prefix such as `com.example/change-requests` until the identifier is approved), accepted `kinds`, and `dailyCap`. |
 
 ## Quick start: the protocol middleware
@@ -51,12 +53,50 @@ server.registerTool("list_things", { description: "List things." }, async () => 
 Call `installChangeRequests` before `server.connect()`. It:
 
 - advertises the SEP section 1 settings object under `capabilities.extensions[extensionId]` in the `initialize` result (SDK 1.x has no `server/discover` yet; the object is the same),
-- answers the five `changeRequests/*` methods, with errors as JSON-RPC `-32602` and `data.reason` from SEP section 10, and the update count in each result's `_meta`,
+- answers the `changeRequests/*` methods (`/changes` too, when the store keeps the feed), with errors as JSON-RPC `-32602` and `data.reason` from SEP section 10, and the update count in each result's `_meta`,
 - registers the `change_requests_*` tools for clients that do not implement the extension, and hides `change_requests_submit` from clients that do, so the model sees one way to submit (`legacyTools: false` turns the tools off),
 - wraps every tool registered after it with the update notice (`noticeOnAllTools: false` turns that off; `withUpdateNotice` is returned for tools registered earlier),
 - with `publishEvent`, advertises `events: true` and hands a `changeRequest.updated` event with the status object to your Events implementation on every status change. List `changeRequestUpdatedEventType` in your `events/list` and deliver each event only to subscriptions its `principal` holds.
 
 One `McpServer` serves one connection, so hiding the submit tool is per client.
+
+When `legacyTools` is false the server exposes no tool the notice lines could name, so it sends only the `_meta` counts, as SEP sections 7 and 12 require.
+
+## What's new: the changes feed
+
+`SqliteStore` and `MemoryStore` also keep the changes feed, so the middleware advertises `changes: true`, answers `changeRequests/changes`, and registers a `whats_new` tool. Publish entries from your release script:
+
+```ts
+await service.publishChange({
+  version: "1.5.0",
+  type: "deprecated",            // added, changed, deprecated, removed, or fixed
+  summary: "export_csv is deprecated. Use export_report with format csv.",
+  changed: [{ type: "tool", name: "export_csv" }],
+  removeAfter: "2027-02-01",
+  changeRequestIds: ["crq_..."], // requests this resolved; each owner sees only its own ids
+});
+```
+
+- `changeRequests/changes` takes `sinceVersion` or `since`, plus `cursor` and `limit`, and returns `currentVersion` (the `McpServer`'s version unless you pass `currentVersion`) and the entries after that point, newest first. Versions compare as semantic versions; pass `compareVersions` for another scheme.
+- It needs no signed-in caller. Anonymous callers and shared credentials see the entries marked `availability: "all"`; a signed-in principal also sees `requester` entries released to it.
+- `removed` entries are always breaking. Set `breaking: true` on any other change that can make a call that worked before fail.
+- Each signed-in principal gets `{ "changes": <count> }` in `_meta` and the line "N changes may affect your use of this server. Call whats_new to see them." while breaking or deprecated entries are unread. Reading the feed clears it. A principal's first call sets the starting point, so new callers are not told about old deprecations. `whats_new` with `notify: false` turns the notice off for that principal (`service.setChangeNotice()` does the same).
+- `changes: false` turns the feed off. A database store implements `ChangeFeedStore` next to `ChangeRequestStore`, or you pass a separate one as `feed`. [`migrations/postgres.sql`](migrations/postgres.sql) has the two tables.
+
+Set `changelogUri` too, so people without an agent can read the same list.
+
+## Anonymous callers
+
+Off by default. Turn it on only with another abuse control in front of the server, as the SEP's security section advises:
+
+```ts
+installChangeRequests(server, { /* ... */ anonymous: true, anonymousDailyCap: 50 });
+```
+
+- When `getPrincipal` returns `null`, `changeRequests/submit` still accepts the request and returns a `ticket` (`crt_...`). The ticket is a bearer credential for `changeRequests/get` (and `change_requests_get`) on that one request: pass `requestId` and `ticket`. A wrong ticket reads as `not_found`.
+- Anonymous callers have no inbox, no update notice, no withdraw, no confirmation, and no status events.
+- They share one principal, `ANONYMOUS_PRINCIPAL`: one daily cap across all of them (`anonymousDailyCap`, default 50), and one unit of demand however many of them ask. A signed-in principal with that value is refused.
+- The store keeps the ticket so a repeated idempotency key gets the same answer back, so treat the store as holding credentials.
 
 The [demo server](../demo) uses exactly this, and [`@agent-change-requests/client`](../client) is the matching client.
 
@@ -126,6 +166,8 @@ import { describe, it } from "vitest";
 import { runStoreConformance } from "@agent-change-requests/server/testing";
 
 runStoreConformance({ describe, it }, () => new MyPostgresStore(freshDatabase()));
+// If it also keeps the changes feed:
+runFeedStoreConformance({ describe, it }, () => new MyPostgresStore(freshDatabase()));
 ```
 
 ## Health check
@@ -184,8 +226,6 @@ The workflow publishes through npm trusted publishing, so no npm token is stored
 
 ## Not in this version
 
-- The changes feed (`changeRequests/changes`, SEP section 12).
-- Anonymous callers and tickets. `anonymous` is false.
 - MCP Events delivery itself. The SDK has no Events implementation yet, so `publishEvent` hands each `changeRequest.updated` event to yours.
 - Evaluating acceptance tests. They are stored as data and never run.
 - A Postgres or Supabase store. The schema is here, and the adapter comes with the first app that uses it.

@@ -1,6 +1,6 @@
 {
   "name": "@agent-change-requests/client",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Client side of the Agent Change Requests extension for @modelcontextprotocol/sdk: consent, a model-facing submission tool, redaction, the inbox, and requester confirmation.",
   "license": "MIT",
   "repository": {

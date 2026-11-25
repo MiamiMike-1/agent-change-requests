@@ -1,4 +1,4 @@
-import type { ChangeRequestRecord, Gap, ListQuery, Page } from "./types.js";
+import type { ChangeRecord, ChangeRequestRecord, FeedReader, Gap, ListQuery, Page } from "./types.js";
 
 /**
  * Where an app keeps its change requests. Implement this once per database.
@@ -36,6 +36,34 @@ export interface ChangeRequestStore {
   ping?(): Promise<void>;
 }
 
+/**
+ * Where an app keeps its changes feed (SEP section 12) and how far each principal
+ * has read it. MemoryStore and SqliteStore implement it next to ChangeRequestStore;
+ * a database store can implement both, or the app can pass a separate one.
+ */
+export interface ChangeFeedStore {
+  /** Stores a new entry and gives it the next seq, higher than any before it. Returns the stored entry. */
+  appendChange(change: Omit<ChangeRecord, "seq">): Promise<ChangeRecord>;
+  /** Entries with seq above afterSeq (all when omitted), highest seq first. */
+  listChanges(afterSeq?: number): Promise<ChangeRecord[]>;
+  getReader(principal: string): Promise<FeedReader | null>;
+  /** Creates or replaces the reader row for reader.principal. */
+  putReader(reader: FeedReader): Promise<void>;
+}
+
+/** True when a store also keeps the changes feed. */
+export function isChangeFeedStore(value: unknown): value is ChangeFeedStore {
+  const v = value as Partial<ChangeFeedStore> | null;
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    typeof v.appendChange === "function" &&
+    typeof v.listChanges === "function" &&
+    typeof v.getReader === "function" &&
+    typeof v.putReader === "function"
+  );
+}
+
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 50;
 
@@ -54,9 +82,33 @@ export function decodeCursor(cursor: string | undefined): number {
 }
 
 /** An in-memory store, for tests and demos. Not for production. */
-export class MemoryStore implements ChangeRequestStore {
+export class MemoryStore implements ChangeRequestStore, ChangeFeedStore {
   private readonly records = new Map<string, ChangeRequestRecord>();
   private readonly gaps: Gap[] = [];
+  private readonly changes: ChangeRecord[] = [];
+  private readonly readers = new Map<string, FeedReader>();
+
+  async appendChange(change: Omit<ChangeRecord, "seq">): Promise<ChangeRecord> {
+    const stored: ChangeRecord = { ...structuredClone(change), seq: (this.changes.at(-1)?.seq ?? 0) + 1 };
+    this.changes.push(stored);
+    return structuredClone(stored);
+  }
+
+  async listChanges(afterSeq = 0): Promise<ChangeRecord[]> {
+    return this.changes
+      .filter((c) => c.seq > afterSeq)
+      .reverse()
+      .map((c) => structuredClone(c));
+  }
+
+  async getReader(principal: string): Promise<FeedReader | null> {
+    const found = this.readers.get(principal);
+    return found ? { ...found } : null;
+  }
+
+  async putReader(reader: FeedReader): Promise<void> {
+    this.readers.set(reader.principal, { ...reader });
+  }
 
   async insert(record: ChangeRequestRecord): Promise<void> {
     if (this.records.has(record.requestId)) throw new Error("requestId already exists");

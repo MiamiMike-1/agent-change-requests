@@ -1,5 +1,5 @@
 import { ChangeRequestError } from "./errors.js";
-import type { AcceptanceTest, Kind, SubmitInput } from "./types.js";
+import { CHANGE_TYPES, type AcceptanceTest, type Kind, type SubmitInput } from "./types.js";
 
 export const LIMITS = {
   title: 120,
@@ -10,6 +10,7 @@ export const LIMITS = {
   textContains: 5,
   note: 1000,
   message: 1000,
+  summary: 500,
 } as const;
 
 const TARGET_TYPES = ["tool", "resource", "prompt", "server"];
@@ -148,5 +149,42 @@ export function validateConfirmTests(tests: unknown, submitted: AcceptanceTest[]
     if (!isObject(t) || typeof t.index !== "number" || !Number.isInteger(t.index)) fail("Each test needs an integer index.");
     if (t.index < 0 || t.index >= count) fail(`Test index ${t.index} does not match a submitted acceptance test.`);
     if (t.outcome !== "pass" && t.outcome !== "fail") fail("Each test outcome must be pass or fail.");
+  }
+}
+
+/** Checks an entry for the changes feed against SEP section 12. */
+export function validateChange(input: unknown): void {
+  if (!isObject(input)) fail("The change must be an object.");
+  requireString(input.version, "version", 100);
+  if (typeof input.type !== "string" || !(CHANGE_TYPES as readonly string[]).includes(input.type)) {
+    fail(`type must be one of ${CHANGE_TYPES.join(", ")}.`);
+  }
+  requireString(input.summary, "summary", LIMITS.summary);
+  if (input.breaking !== undefined && typeof input.breaking !== "boolean") fail("breaking must be a boolean.");
+  if (input.type === "removed" && input.breaking === false) fail("A removed entry is always breaking.");
+  if (input.changed !== undefined) {
+    if (!Array.isArray(input.changed)) fail("changed must be an array.");
+    for (const t of input.changed) {
+      if (!isObject(t) || typeof t.type !== "string" || !TARGET_TYPES.includes(t.type)) {
+        fail(`Each of changed needs a type: ${TARGET_TYPES.join(", ")}.`);
+      }
+      if (t.type !== "server") requireString(t.name, "changed[].name", 200);
+    }
+  }
+  optionalString(input.changelogUri, "changelogUri", 2000);
+  if (input.removeAfter !== undefined) {
+    if (typeof input.removeAfter !== "string" || Number.isNaN(Date.parse(input.removeAfter))) {
+      fail("removeAfter must be a date such as 2027-02-01.");
+    }
+  }
+  if (input.publishedAt !== undefined && (typeof input.publishedAt !== "string" || Number.isNaN(Date.parse(input.publishedAt)))) {
+    fail("publishedAt must be an ISO 8601 time.");
+  }
+  optionalEnum(input.availability, "availability", ["all", "requester"]);
+  for (const field of ["releasedTo", "changeRequestIds"] as const) {
+    const value = input[field];
+    if (value !== undefined && (!Array.isArray(value) || value.some((v) => typeof v !== "string" || v === ""))) {
+      fail(`${field} must be an array of strings.`);
+    }
   }
 }

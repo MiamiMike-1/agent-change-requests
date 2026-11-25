@@ -10,4 +10,5 @@ it("runs the loop end to end, from the gap to a confirmed shipped change", async
   expect(result.transcript).toContain("Note from Invoices: 1 of your change requests has an update.");
   expect(result.transcript).toContain("Totalling one customer's unpaid invoices for <redacted>");
   expect(result.transcript).not.toMatch(/receives[^\n]*Acme Corp/);
+  expect(result.changesSeen).toEqual([{ version: "1.1.0", type: "added", changeRequestIds: [result.requestId] }]);
 });

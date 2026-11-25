@@ -174,7 +174,7 @@ function utcDay(date: Date): string {
 
 function sameTarget(a: SubmitParams["target"], b: LedgerEntry["target"]): boolean {
   if (!a || !b) return false;
-  return a.type === b.type && (a.name ?? "") === (b.name ?? "");
+  return a.type === b.type && (a.name ?? "") === (b.name ?? "") && (a.component ?? "") === (b.component ?? "");
 }
 
 export class ChangeRequestsClient {

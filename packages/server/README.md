@@ -159,6 +159,26 @@ Every request carries `about`: `app` for the server's own tools, or `spec` for t
 
 Because every server that uses this package computes the same scorecard and the same tag, their numbers line up. A periodic job can read each server's `change_requests_scorecard` and `change_requests_list` with `about: "spec"`, and draft one cross-server report for the spec's maintainers: the numbers per server and the lessons about the standard, written without any server's data.
 
+### Relaying requests to the spec's maintainers
+
+An agent can also file a request about the extension itself with `target: { type: "extension", name: "<extension id>", component: "spec" | "server-sdk" | "client-sdk" }`. Those are marked `spec` too. To send them one level up, attach an `UpstreamRelay`:
+
+```ts
+import { GitHubIssueSink, UpstreamRelay } from "@agent-change-requests/server";
+
+const relay = new UpstreamRelay({
+  service,
+  sink: new GitHubIssueSink({ token: process.env.UPSTREAM_GITHUB_TOKEN! }), // repo defaults to MiamiMike-1/agent-change-requests
+  serverName: "Example MCP",
+});
+relay.attach(); // forwards each new spec request after submit answers
+
+// On a schedule: closed as completed -> shipped, closed as not planned -> declined.
+await relay.sync();
+```
+
+The relay sends only `kind`, `title`, `description`, `target`, `failureMode`, and `impact`. It never sends the principal, `context`, or acceptance tests, and it neutralizes `@` mentions. It forwards at most 20 requests a day by default (`maxPerDay`). On forwarding, a `received` request moves to `triaged` with the issue link as its message, so the requester can follow it. The issue is public, so say so in your policy (SEP section 3). Requires a token that can create issues in the target repository; use `repo` to relay somewhere else, or write your own `UpstreamSink`.
+
 ## Store conformance
 
 ```ts

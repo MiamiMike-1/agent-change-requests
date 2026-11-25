@@ -23,6 +23,8 @@ import {
   type Status,
   type StatusObject,
   type SubmitResult,
+  type Target,
+  type UpstreamLink,
 } from "./types.js";
 
 /** The tool names this package registers. A request that targets one is about the spec. */
@@ -237,7 +239,7 @@ export class ChangeRequestService {
       title: params.title,
       description: params.description,
       origin: params.origin ?? "agent",
-      about: params.about ?? this.inferAbout(params.target?.name),
+      about: params.about ?? this.inferAbout(params.target),
       status: "received",
       demandFrom: [who],
       confirmations: [],
@@ -600,10 +602,38 @@ export class ChangeRequestService {
     return record;
   }
 
+  /**
+   * Records where a request was relayed upstream. Does not change status or raise an
+   * update. UpstreamRelay calls it; a builder with its own relay can too.
+   */
+  async setUpstream(requestId: string, link: UpstreamLink): Promise<ChangeRequestRecord> {
+    if (typeof link?.ref !== "string" || link.ref.length === 0) {
+      throw new ChangeRequestError("invalid_params", "An upstream link needs a ref.");
+    }
+    return this.mutate(requestId, (r) => {
+      r.upstream = { ...link };
+    });
+  }
+
+  /** The stored record, for the builder side. Checks no owner and does not clear the update. */
+  async recordOf(requestId: string): Promise<ChangeRequestRecord> {
+    const record = typeof requestId === "string" ? await this.store.get(requestId) : null;
+    if (!record) throw new ChangeRequestError("not_found", "No such request.");
+    return record;
+  }
+
   // ---- Helpers -----------------------------------------------------------
 
-  private inferAbout(targetName: string | undefined): About {
-    return targetName !== undefined && this.specTargets.has(targetName) ? "spec" : "app";
+  /**
+   * A request is about the spec when it targets one of this package's tools, a name in
+   * specTargets, or the change requests extension itself under any vendor prefix.
+   */
+  private inferAbout(target: Target | undefined): About {
+    const name = target?.name;
+    if (name === undefined) return "app";
+    if (this.specTargets.has(name)) return "spec";
+    if (target?.type === "extension" && (name === "change-requests" || name.endsWith("/change-requests"))) return "spec";
+    return "app";
   }
 
   private requirePrincipal(principal: string | null | undefined): string {

@@ -156,7 +156,7 @@ A client MUST NOT call the methods below unless the server advertises the extens
 | `kind` | Required | One of the server's advertised `kinds`. |
 | `title` | Required | At most 120 characters. |
 | `description` | Required | At most 4,000 characters. Plain text. |
-| `target` | Optional | `type` is `tool`, `resource`, `prompt`, or `server`. `name` is required unless `type` is `server`. |
+| `target` | Optional | `type` is `tool`, `resource`, `prompt`, `server`, or `extension`. `name` is required unless `type` is `server`. For `extension`, `name` is the extension identifier and `component` MAY name the part of it, as its maintainers define them. |
 | `context` | Optional | `goal`, `workaround`, `cause`, and `attempts` (at most 5 prior calls with their outcomes). `cause` is the agent's hypothesis about why the gap exists, at most 500 characters. |
 | `failureMode` | Optional | How the surface failed. One of the base modes below, or a vendor-prefixed mode. |
 | `impact` | Optional | `blocked` is a boolean. `frequency` is `once` or `recurring`. `severity` is `low`, `medium`, or `high`. `detectability` is `immediate`, `eventual`, or `hidden`. |
@@ -187,6 +187,13 @@ Normative requirements:
 - A server MUST reject a request whose `kind` it did not advertise.
 - A server MUST NOT reject a request because of an unrecognized `failureMode`. It SHOULD store the value unchanged.
 - A server and any reader of a request MUST treat `context.cause` as the requester's hypothesis, not a finding, and MUST NOT present it as the established cause.
+
+**Requests about an extension itself.** A requester may hit a gap in the protocol rather than in the server: a field this extension lacks, a notice its client never shows, or an SDK that makes the extension hard to adopt. A request with `target.type` set to `extension` is about the extension that `name` identifies, for example `io.modelcontextprotocol/change-requests` with `component` set to `spec`, `server-sdk`, or `client-sdk`. The rules for such a request:
+
+- A server that implements this extension MUST accept `extension` targets on the same terms as any other request. It MUST NOT reject one because the server does not maintain that extension.
+- A server SHOULD relay such a request to the extension's maintainers when it has a way to, and SHOULD carry their answer back as an ordinary status change, so the requester learns the outcome through its own inbox (Section 7).
+- A relayed copy MUST NOT carry the principal or any other requester identity. It SHOULD carry only `kind`, `title`, `description`, `target`, `failureMode`, and `impact`, and MUST NOT carry `context` or acceptance tests unless the server's published policy says they are relayed. A server that relays to a public location MUST say so at `policyUri`.
+- When a relayed request ships, the server SHOULD set `resolution.availability` to `all` and `changelogUri` to the maintainers' record of the change.
 
 `kind` says what the requester wants. `failureMode` says how the surface failed, so that the same mechanism can be counted across tools and servers. The base failure modes are:
 
@@ -409,6 +416,8 @@ The inbox tells a requester about the changes it asked for. The people who build
 
 **The requester decides whether it worked.** A lifecycle that ends at the server's own `shipped` status measures what vendors say. Third parties such as registries can only trust responsiveness figures built from evidence the vendor does not control. The same friction ledger records a deployment check that passed 22 of 22 tests against cached, pre-deploy output, which is the server-side view of a fix being wrong in exactly this way. Confirmation supplies that evidence, and acceptance tests make it mechanical: the requester re-runs the call it wanted and reports the result. Confirmation is an attribute of a shipped request and not a status, so a missing confirmation never blocks the lifecycle.
 
+**Requests one level up go through the server the agent already uses.** An agent that finds a gap in this extension, or in another one, is talking to a server, not to the extension's maintainers. Two other designs were considered. A central, hosted endpoint for protocol feedback would need its own authentication, moderation, and operator, and an agent would have to know to call it. A well-known address in each extension's settings object would push every client to make outbound calls to a party the user never enabled, which Section 9's per-server consent does not cover. Relaying through the server keeps consent, redaction, the daily cap, and the inbox exactly as they are: the requester files once, with the server it already trusts, and collects the answer the same way. The relay strips identity and task context because the maintainers are a third party to the requester's session. Because the base list of target types now includes `extension`, the same path serves any extension, not just this one.
+
 **Fulfillment is out of scope.** Whether a human, the vendor's own agent, or an automated pipeline builds the change is a vendor decision. The extension standardizes the conversation and leaves the engineering process alone. A separate extension could later define contributed implementations, where the requester proposes the change itself. That raises review, licensing, and supply-chain questions that deserve their own proposal.
 
 **Related work.** The request and status model follows issue trackers. Idempotency keys follow common payment API practice. The durable-handle pattern follows the MCP Tasks extension, which solved a similar problem for long-running operations.
@@ -442,6 +451,7 @@ The extension process requires at least one reference implementation in an offic
    - It records confirmation as in Section 11, kept apart from the server's own `shipped`.
    - It keeps the changes feed in Section 12 and advertises `changes: true`. A release script publishes each entry; the feed answers `sinceVersion` or `since` for any caller, shows each principal only its own `changeRequestIds`, and adds `{ "changes": <count> }` and one fixed line for unread `breaking` and `deprecated` entries. A principal's first call sets where its count starts, and the principal can turn the notice off.
    - It accepts anonymous callers when the server turns `anonymous` on (Section 3). Each submission returns a `ticket` that reads that one request through `changeRequests/get`. Anonymous callers get no inbox, notice, confirmation, or status events, and they share one daily cap and count as one principal toward `demand`, so turning them on cannot inflate demand.
+   - It relays requests about the extension itself (`target.type` `extension`) to its maintainers through `UpstreamRelay`, with a GitHub Issues sink that files them in this repository, and syncs each issue's state back as `shipped` or `declined`.
    - It keeps seven tools (`change_requests_submit`, `_list`, `_get`, `_withdraw`, `_confirm`, `_scorecard`, and `whats_new`) for clients without the extension. When the server registers none of them, it sends the notice counts in `_meta` only, since the lines would name a tool the client cannot call. Clients that advertise the extension don't see the submit tool, as Backward Compatibility recommends.
 2. **Client support.** [`@agent-change-requests/client`](packages/client) 0.3.0 wraps the SDK's `Client`:
    - It advertises the extension only with consent, and never from an ephemeral session.
@@ -478,6 +488,8 @@ The packages and the demo use a vendor prefix until the identifier is approved.
 **Acceptance test abuse.** A test names a call with arguments. Run carelessly, it becomes a way to trigger operations with attacker-chosen inputs. Section 4 forbids execution against production data on the submitter's behalf. Servers MUST also apply normal authorization to any evaluation.
 
 **Event delivery.** Push and webhook delivery of status changes inherit the security requirements of the Events extension, including callback verification, protection against requests to internal addresses, and signing. This extension adds none of its own. Servers MUST scope `changeRequest.updated` subscriptions to the subscribing principal's own requests, so that an event never reveals another principal's request.
+
+**Relayed requests.** A request relayed to an extension's maintainers (Section 3) leaves the server for a third party, often a public issue tracker. Its fields are model-written, so a relay MUST neutralize anything the destination would act on, such as mentions that notify people, and SHOULD rate-limit what it forwards in addition to the per-principal cap. Maintainers MUST treat relayed text as untrusted data, as with any request.
 
 **Cross-tenant disclosure.** `changeRequests/list` and `changeRequests/get` MUST enforce principal ownership. `duplicateOf` and `demand` MUST NOT reveal the content or identity of another principal's request.
 

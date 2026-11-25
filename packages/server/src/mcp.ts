@@ -136,8 +136,14 @@ export function registerChangeRequestTools(server: McpServer, options: McpAdapte
     description: z.string().max(4000).describe("What is broken or missing, in plain text, at most 4000 characters."),
     target: z
       .object({
-        type: z.enum(["tool", "resource", "prompt", "server"]).describe("tool, resource, prompt, or server."),
-        name: z.string().optional().describe("The tool, resource, or prompt name."),
+        type: z
+          .enum(["tool", "resource", "prompt", "server", "extension"])
+          .describe("tool, resource, prompt, or server for this app. extension for a protocol extension itself, such as this change request standard."),
+        name: z.string().optional().describe("The tool, resource, or prompt name, or for extension the extension identifier."),
+        component: z
+          .string()
+          .optional()
+          .describe("For extension only: spec, server-sdk, or client-sdk."),
       })
       .optional()
       .describe("What the request is about. name is required unless type is server."),

@@ -127,6 +127,9 @@ export function redactSubmission<T extends Record<string, unknown>>(
       if (typeof target.name === "string") {
         target.name = new Redactor({ ...options, rules: [], extraRules: [] }).text(target.name, "target.name", findings);
       }
+      if (typeof target.component === "string") {
+        target.component = new Redactor({ ...options, rules: [], extraRules: [] }).text(target.component, "target.component", findings);
+      }
       out[key] = target;
     } else if (key === "acceptanceTests" && Array.isArray(value)) {
       out[key] = value.map((test, i) => {

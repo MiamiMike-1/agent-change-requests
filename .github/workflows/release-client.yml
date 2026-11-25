@@ -1,0 +1,44 @@
+# Publishes @agent-change-requests/client to npm when a tag like client-v0.1.0 is pushed,
+# or when a GitHub Release is published with a new tag of that form (which creates the tag).
+# Publishing uses npm trusted publishing (OIDC) once it is set up for the package on
+# npmjs.com. Until then, for the very first release, a repository secret NPM_TOKEN
+# holding a short-lived npm granular access token is used. Delete that secret once
+# trusted publishing is on.
+name: Release client package
+
+on:
+  push:
+    tags:
+      - "client-v*"
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@^11.5.1
+      - run: npm ci
+      - name: Check the tag matches the package version
+        run: |
+          version=$(node -p "require('./packages/client/package.json').version")
+          if [ "client-v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $version" >&2
+            exit 1
+          fi
+      # The client's tests import the server package's build, so build the server first.
+      - run: npm run build --workspace packages/server
+      - run: npm run typecheck --workspace packages/client
+      - run: npm test --workspace packages/client
+      - run: npm run build --workspace packages/client
+      - run: npm publish --workspace packages/client --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

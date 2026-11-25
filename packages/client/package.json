@@ -1,0 +1,48 @@
+{
+  "name": "@agent-change-requests/client",
+  "version": "0.1.0",
+  "description": "Client side of the Agent Change Requests extension for @modelcontextprotocol/sdk: consent, a model-facing submission tool, redaction, the inbox, and requester confirmation.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MiamiMike-1/agent-change-requests.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://github.com/MiamiMike-1/agent-change-requests/tree/main/packages/client",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0"
+  },
+  "devDependencies": {
+    "@agent-change-requests/server": "*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0",
+    "zod": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

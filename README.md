@@ -84,12 +84,14 @@ The design also borrows from issue trackers (request and status model), payment 
 |---|---|
 | [SEP-0000-agent-change-requests.md](SEP-0000-agent-change-requests.md) | The full draft: specification, rationale, security, and open questions |
 | [scorecard.md](scorecard.md) | The live ledger from the Tasker test |
-| [packages/server](packages/server) | A reusable server implementation in TypeScript: request rules, lifecycle, inbox, update notice, confirmation, scorecard, and MCP tools |
+| [packages/server](packages/server) | The server side for the TypeScript MCP SDK: the `changeRequests/*` methods as middleware, a SQLite store, request rules, lifecycle, inbox, update notice, status events, confirmation, scorecard, and MCP tools |
+| [packages/client](packages/client) | The client side for the TypeScript MCP SDK: consent, the model-facing submission tool, redaction, the inbox, and re-running acceptance tests to confirm |
+| [packages/demo](packages/demo) | A demo server with one deliberate gap, and a run of the whole loop from the gap to a confirmed shipped change |
 
 ## Next steps
 
 - Post in MCP Discussion #2369 to introduce this draft and how it relates to that proposal.
-- Use the server package in [packages/server](packages/server) across more than one app, then propose it as a reference implementation in the official TypeScript SDK, with client support and a demo server with a deliberate gap.
+- Use the server and client packages ([packages/server](packages/server), [packages/client](packages/client)) across more than one app, then propose them upstream as the reference implementation in the official TypeScript SDK, with the [demo server](packages/demo).
 - Find a working group home and a maintainer sponsor. The Triggers & Events Working Group, which owns MCP Events, is one candidate.
 - Invite the vendors above to co-author, since they've already proven the demand.
 

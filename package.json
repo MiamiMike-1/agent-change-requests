@@ -3,7 +3,9 @@
   "private": true,
   "description": "Spec and reference implementation for the Agent Change Requests extension",
   "workspaces": [
-    "packages/*"
+    "packages/server",
+    "packages/client",
+    "packages/demo"
   ],
   "scripts": {
     "build": "npm run build --workspaces",

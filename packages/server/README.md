@@ -4,6 +4,10 @@ Server side of the [Agent Change Requests extension](../../SEP-0000-agent-change
 
 It handles the parts every server needs the same way:
 
+- **Protocol methods:** `changeRequests/submit`, `/get`, `/list`, `/withdraw`, and `/confirm` as middleware for `McpServer`, advertised under `capabilities.extensions`, in one call.
+- **SQLite store:** `SqliteStore` on `node:sqlite` (Node 22.5 and later) or `better-sqlite3`, so requests outlive the session that filed them.
+- **Status events:** `changeRequest.updated` with the status object, handed to your Events implementation on every status change.
+
 - **Request rules:** the fields and limits in SEP section 3, idempotency keys, and a daily cap per caller.
 - **Lifecycle:** `received` through `shipped`, with terminal statuses that never move again.
 - **Inbox:** requests belong to the authenticated caller, not the session. Any later session collects the answer.
@@ -17,13 +21,46 @@ It handles the parts every server needs the same way:
 
 | Piece | What to provide |
 |---|---|
-| Storage | A `ChangeRequestStore`. `MemoryStore` is included for tests. For Postgres or Supabase, apply [`migrations/postgres.sql`](migrations/postgres.sql) and implement the interface against it, then run the conformance suite. `update()` must write only when the stored `revision` matches, so two writers never overwrite each other. |
+| Storage | A `ChangeRequestStore`. `SqliteStore` (from `@agent-change-requests/server/sqlite`) works out of the box; `MemoryStore` is included for tests. For Postgres or Supabase, apply [`migrations/postgres.sql`](migrations/postgres.sql) and implement the interface against it, then run the conformance suite. `update()` must write only when the stored `revision` matches, so two writers never overwrite each other. |
 | Auth | `getPrincipal(call)`: the user or account the server already authenticates. Return `null` when there is none. Never a session id, and never an OAuth client id, which every user of that client shares. |
 | Notify | `onEvent(event)`: called on every submit, status change, stage, confirmation, and withdrawal. Use it to tell whoever builds changes, or to publish MCP Events. |
 | Build side | Call `transition()` when a request is triaged, planned, built, shipped, or declined, and `recordStage()` when it is approved, gets a pull request, merges, publishes, and goes live. A CI or release script is the natural place. |
 | Settings | `appName`, `extensionId` (a vendor prefix such as `com.example/change-requests` until the identifier is approved), accepted `kinds`, and `dailyCap`. |
 
-## Quick start
+## Quick start: the protocol middleware
+
+```ts
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { installChangeRequests } from "@agent-change-requests/server/middleware";
+
+const server = new McpServer({ name: "my-app", version: "1.4.0" });
+const { service } = installChangeRequests(server, {
+  appName: "My App",
+  extensionId: "com.example/change-requests", // a vendor prefix until the identifier is approved
+  store: "change-requests.db",                // a SQLite file, or any ChangeRequestStore
+  getPrincipal: (call) => {
+    const userId = call.authInfo?.extra?.userId; // the signed-in user, never authInfo.clientId
+    return typeof userId === "string" ? userId : null;
+  },
+});
+
+// Register your own tools after the install: their results carry the update notice.
+server.registerTool("list_things", { description: "List things." }, async () => ({ content: [{ type: "text", text: "[]" }] }));
+```
+
+Call `installChangeRequests` before `server.connect()`. It:
+
+- advertises the SEP section 1 settings object under `capabilities.extensions[extensionId]` in the `initialize` result (SDK 1.x has no `server/discover` yet; the object is the same),
+- answers the five `changeRequests/*` methods, with errors as JSON-RPC `-32602` and `data.reason` from SEP section 10, and the update count in each result's `_meta`,
+- registers the `change_requests_*` tools for clients that do not implement the extension, and hides `change_requests_submit` from clients that do, so the model sees one way to submit (`legacyTools: false` turns the tools off),
+- wraps every tool registered after it with the update notice (`noticeOnAllTools: false` turns that off; `withUpdateNotice` is returned for tools registered earlier),
+- with `publishEvent`, advertises `events: true` and hands a `changeRequest.updated` event with the status object to your Events implementation on every status change. List `changeRequestUpdatedEventType` in your `events/list` and deliver each event only to subscriptions its `principal` holds.
+
+One `McpServer` serves one connection, so hiding the submit tool is per client.
+
+The [demo server](../demo) uses exactly this, and [`@agent-change-requests/client`](../client) is the matching client.
+
+## Quick start: tools only
 
 ```ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -147,9 +184,9 @@ The workflow publishes through npm trusted publishing, so no npm token is stored
 
 ## Not in this version
 
-- Protocol methods (`changeRequests/submit` and the rest). The tools cover clients that don't implement the extension, which is nearly all of them today.
+- The changes feed (`changeRequests/changes`, SEP section 12).
 - Anonymous callers and tickets. `anonymous` is false.
-- MCP Events delivery. `onEvent` is the hook to build it on.
+- MCP Events delivery itself. The SDK has no Events implementation yet, so `publishEvent` hands each `changeRequest.updated` event to yours.
 - Evaluating acceptance tests. They are stored as data and never run.
 - A Postgres or Supabase store. The schema is here, and the adapter comes with the first app that uses it.
 

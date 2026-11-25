@@ -1,5 +1,9 @@
 # Changelog
 
+## Spec draft: reference implementation status (November 25, 2026)
+
+- The Reference Implementation section now describes the server package that exists, and lists what is still missing before review: the protocol methods, status events, the changes feed, anonymous callers, a home in the official TypeScript SDK, client support, and the demonstration server.
+
 ## Server package 0.2.0 (November 24, 2026)
 
 - New health check, so anyone can confirm a deployed server is up and can reach its store without signing in or copying a token. `healthResponse` answers `200` with `"store": "reachable"` or `503` with `"store": "unreachable"`, and `isHealthRequest` picks out `GET /health` so it can run before the credential check.

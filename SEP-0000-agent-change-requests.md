@@ -428,13 +428,31 @@ Clients that do not implement the extension see no change.
 
 ## Reference Implementation
 
-None exists yet. The extension process requires at least one reference implementation in an official SDK before review. The planned prototype has three parts:
+The extension process requires at least one reference implementation in an official SDK before review. That implementation does not exist yet. Work toward it has started outside the SDK.
 
-1. **Server middleware for the TypeScript SDK.** Adds the five methods, a SQLite store, idempotency, the principal-scoped inbox, and the status event type to any existing server in under 20 lines of integration code.
-2. **Client support in the TypeScript SDK.** Advertises the extension, exposes the model-facing submission tool, applies a redaction pass, and checks the inbox when a response carries an update count.
-3. **A demonstration server.** One tool with a deliberate gap, a recorded agent run that files a request with an acceptance test, a change that ships, and a second session that collects the `shipped` status and removes its workaround.
+**What exists today.** [`@agent-change-requests/server`](packages/server) (version 0.2.0, MIT) is a server package for the TypeScript SDK. It plugs into any `McpServer` from `@modelcontextprotocol/sdk` and provides:
 
-The prototype will use a third-party vendor prefix until the identifier is approved.
+- Request validation with the field limits in Section 3, idempotency keys, and a daily cap per principal.
+- The lifecycle in Section 5, with terminal statuses that never move again.
+- The principal-scoped inbox and the update notice in Section 7, as a count in `_meta` and one line of text on every wrapped tool result, with no inbox for shared credentials.
+- Confirmation as in Section 11, kept apart from the server's own `shipped`, plus whether the requester adopted the change.
+- An `onEvent` hook on every change, a store interface with an in-memory store, a conformance suite, a Postgres schema, and a health check that needs no credential.
+- Six model-facing tools: `change_requests_submit`, `_list`, `_get`, `_withdraw`, `_confirm`, and `_scorecard`.
+
+Tasker's MCP server, the source of the evidence in the README, has implemented the draft since Tasker MCP 1.3.0 under the vendor prefix `com.rocketproforma/change-requests`.
+
+**What is still missing.** The plan for the reference implementation has three parts. The package covers part of the first.
+
+1. **Server middleware for the TypeScript SDK.** Still needed:
+   - The `changeRequests/*` protocol methods in Section 2. The package offers tools only, which reach the clients in use today but carry none of the client-side consent or redaction.
+   - Status events over the Events extension (Section 8). `onEvent` is the hook to build them on.
+   - The changes feed (Section 12).
+   - Anonymous callers, which the package does not accept.
+   - A move from this repository into the official SDK, or a form the SDK maintainers accept.
+2. **Client support in the TypeScript SDK.** Not started. It advertises the extension, exposes the model-facing submission tool, applies a redaction pass, and checks the inbox when a response carries an update count.
+3. **A demonstration server.** Not started. One tool with a deliberate gap, a recorded agent run that files a request with an acceptance test, a change that ships, and a second session that collects the `shipped` status and removes its workaround.
+
+The package and the prototype use a vendor prefix until the identifier is approved.
 
 ## Security Implications
 

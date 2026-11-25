@@ -21,6 +21,8 @@ The three parts the SEP's Reference Implementation section plans, built on `@mod
 - `inspect()` reads the inbox when a result carries an update count, records shipped requests and obsolete workarounds in a ledger that outlives the session, and strips the notice line when the client has no consent.
 - `retestAndConfirm()` re-runs the client's own acceptance tests and confirms with per-test outcomes.
 
+- New release workflow, `release-client.yml`: a `client-vX.Y.Z` tag runs the client's tests and publishes it to npm with provenance, the same way the server package is released.
+
 **Demo**
 
 - `packages/demo`: an invoices server whose `list_invoices` cannot filter by customer in 1.0.0 and can in 1.1.0. `npm run demo` runs the loop from the gap to a confirmed shipped change and writes a transcript. CI runs it on every pull request.

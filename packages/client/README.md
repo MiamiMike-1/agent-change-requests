@@ -52,6 +52,18 @@ const { result, inbox } = await changeRequests.inspect(raw);
 // inbox?.shipped lists requests that shipped with workaroundObsolete: true
 ```
 
+### Hosts that show the model structured content
+
+Some hosts show the model a tool's `structuredContent` in place of its text, which drops the server's update notice line. SEP section 7 makes carrying the notice the client's job in that case. Show the model `modelContent` instead of building the text yourself:
+
+```ts
+const { modelContent } = await changeRequests.inspect(raw);
+// [{ type: "text", text: "<structuredContent as JSON>" },
+//  { type: "text", text: "Note from Invoices: 1 of your change requests has an update. Call change_requests_list to see them." }]
+```
+
+`modelContent(result)` and `noticeLine(result)` do the same without reading the inbox. The line is the server's own when the text carries one. Otherwise the client builds the same fixed line from the `_meta` count, naming `inboxToolName` if you set it, or the server's `change_requests_list` if the server lists it, and no line at all when the model has no inbox tool to call. The line never carries request titles or other request content. Without consent, or in an ephemeral session, there is no line (SEP section 9).
+
 After a request ships:
 
 ```ts

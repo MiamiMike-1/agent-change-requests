@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ChangeRequestsClient, changeRequestsCapabilities, MemoryLedger, type ChangeRequestsClientOptions } from "../src/index.js";
 
@@ -199,6 +199,82 @@ describe("client-side controls", () => {
     expect(first.content[0]!.text).toMatch(/^Filed as crq_/);
     const second = await cr.callSubmissionTool(gap);
     expect(second.content[0]!.text).toMatch(/^You already filed this gap/);
+  });
+});
+
+describe("the notice for hosts that show structured content (SEP section 7)", () => {
+  type Result = { content: { type: string; text: string }[]; structuredContent?: unknown; _meta?: Record<string, unknown> };
+
+  async function shippedResult(options: Partial<ChangeRequestsClientOptions> = {}) {
+    const ctx = await setup(options);
+    const filed = await ctx.cr.submit(gap);
+    if (!filed.submitted) throw new Error("not submitted");
+    ctx.state.fixed = true;
+    await ctx.service.transition(filed.result.requestId, { status: "shipped", resolution: { availability: "all", workaroundObsolete: true } });
+    const result = (await ctx.client.callTool({ name: "list_invoices", arguments: {} })) as Result;
+    return { ...ctx, result, requestId: filed.result.requestId };
+  }
+
+  it("keeps the server's line after the structured content", async () => {
+    const { cr, result } = await shippedResult();
+    const serverLine = result.content.at(-1)!.text;
+    expect(serverLine).toContain("1 of your change requests has an update");
+    const shown = await cr.modelContent(result);
+    expect(shown).toEqual([
+      { type: "text", text: JSON.stringify(result.structuredContent) },
+      { type: "text", text: serverLine },
+    ]);
+  });
+
+  it("builds the line from the _meta count when the text has none, naming the server's inbox tool", async () => {
+    const { cr, result } = await shippedResult();
+    const metaOnly = { ...result, content: result.content.slice(0, -1) };
+    const shown = await cr.modelContent(metaOnly);
+    expect(shown.at(-1)).toEqual({ type: "text", text: "1 of your change requests has an update. Call change_requests_list to see them." });
+    expect(shown.at(-1)!.text).not.toContain(gap.title);
+  });
+
+  it("names the host's own inbox tool when given one", async () => {
+    const { cr, result } = await shippedResult({ inboxToolName: "check_requests" });
+    const shown = await cr.modelContent({ structuredContent: result.structuredContent, _meta: { [EXT]: { updates: 3 } } });
+    expect(shown.at(-1)!.text).toBe("3 of your change requests have an update. Call check_requests to see them.");
+  });
+
+  it("adds no line when the server lists no inbox tool the model can call", async () => {
+    const { cr } = await setup();
+    const spy = vi.spyOn(cr as unknown as { serverHasTool: (n: string) => Promise<boolean> }, "serverHasTool").mockResolvedValue(false);
+    const shown = await cr.modelContent({ structuredContent: { ok: true }, _meta: { [EXT]: { updates: 2 } } });
+    expect(shown).toEqual([{ type: "text", text: '{"ok":true}' }]);
+    expect(spy).toHaveBeenCalledWith("change_requests_list");
+  });
+
+  it("withholds the line without consent or in an ephemeral session (SEP section 9)", async () => {
+    for (const options of [{ consent: false }, { ephemeral: true }]) {
+      const { cr } = await setup(options);
+      const result = {
+        content: [{ type: "text", text: "[]" }, { type: "text", text: "Note from Invoices: 1 of your change requests has an update. Call change_requests_list to see them." }],
+        structuredContent: { invoices: [] },
+        _meta: { [EXT]: { updates: 1 } },
+      };
+      expect(await cr.noticeLine(result)).toBeNull();
+      expect(await cr.modelContent(result)).toEqual([{ type: "text", text: '{"invoices":[]}' }]);
+      expect(await cr.modelContent({ content: result.content })).toEqual([{ type: "text", text: "[]" }]);
+    }
+  });
+
+  it("adds nothing when no update is announced", async () => {
+    const { cr, client } = await setup();
+    const result = (await client.callTool({ name: "list_invoices", arguments: {} })) as Result;
+    expect(await cr.noticeLine(result)).toBeNull();
+    expect(await cr.modelContent(result)).toEqual([{ type: "text", text: JSON.stringify(result.structuredContent) }]);
+  });
+
+  it("inspect() returns the line it worked out before reading the inbox", async () => {
+    const { cr, result, requestId } = await shippedResult();
+    const seen = await cr.inspect(result);
+    expect(seen.inbox?.shipped.map((s) => s.requestId)).toEqual([requestId]);
+    expect(seen.notice).toContain("1 of your change requests has an update");
+    expect(seen.modelContent.at(-1)!.text).toBe(seen.notice);
   });
 });
 

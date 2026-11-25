@@ -1,5 +1,10 @@
 # Changelog
 
+## Client 0.2.0 (November 25, 2026)
+
+- The client now carries the update notice for hosts that show the model a tool's `structuredContent` in place of its text, as SEP section 7 asks. `inspect()` returns `notice` and `modelContent`, and the new `noticeLine()` and `modelContent()` work without reading the inbox. The line is the server's own when present, or one built from the `_meta` count that names an inbox tool the model can call (`inboxToolName`, or the server's `change_requests_list`). It is withheld without consent or in an ephemeral session.
+- New export `updateNoticeLine(count, tool)`.
+
 ## Reference implementation (November 25, 2026)
 
 The three parts the SEP's Reference Implementation section plans, built on `@modelcontextprotocol/sdk` 1.x.

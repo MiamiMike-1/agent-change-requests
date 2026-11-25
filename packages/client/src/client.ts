@@ -55,6 +55,12 @@ export interface ChangeRequestsClientOptions extends ConsentOptions {
   onShipped?: (status: StatusObject, entry: LedgerEntry) => void | Promise<void>;
   /** Name of the model-facing submission tool. Default file_change_request. */
   toolName?: string;
+  /**
+   * The inbox tool a client-built notice line names (SEP section 7). It must be a tool the
+   * model can call. Default: the server's change_requests_list, used only when the server
+   * lists it. Set it when the host gives the model its own inbox tool.
+   */
+  inboxToolName?: string;
   now?: () => Date;
 }
 
@@ -77,10 +83,42 @@ export interface Inspection<R> {
   result: R;
   /** Present when the client read its inbox because of the notice. */
   inbox?: InboxCheck;
+  /** The notice line the model should see, or null (SEP section 7). */
+  notice: string | null;
+  /** What to show the model for this result. See ChangeRequestsClient.modelContent(). */
+  modelContent: { type: "text"; text: string }[];
+}
+
+/** A tool result as a client receives it. */
+export interface ToolResultLike {
+  content?: unknown[];
+  structuredContent?: unknown;
+  _meta?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 /** The text line servers add while updates wait. Matches any wording that carries the count. */
 const NOTICE_LINE = /\b(\d+) of your change requests (?:has|have) an update\b/;
+
+/** The server's default inbox tool (SEP section 7 example). */
+const DEFAULT_INBOX_TOOL = "change_requests_list";
+
+/** The fixed line a client adds from the _meta count. It carries no request content. */
+export function updateNoticeLine(count: number, inboxTool: string): string {
+  const verb = count === 1 ? "has" : "have";
+  return `${count} of your change requests ${verb} an update. Call ${inboxTool} to see them.`;
+}
+
+function isNoticeBlock(c: unknown): boolean {
+  const text = (c as { type?: string; text?: string }).text;
+  return (c as { type?: string }).type === "text" && typeof text === "string" && NOTICE_LINE.test(text);
+}
+
+function textBlocks(content: unknown[]): { type: "text"; text: string }[] {
+  return content
+    .filter((c) => (c as { type?: string }).type === "text" && typeof (c as { text?: unknown }).text === "string")
+    .map((c) => ({ type: "text" as const, text: (c as { text: string }).text }));
+}
 
 /** The capabilities to pass to new Client(): the extension is advertised only when allowed. */
 export function changeRequestsCapabilities(
@@ -113,6 +151,7 @@ export class ChangeRequestsClient {
   private readonly options: ChangeRequestsClientOptions;
   private readonly ledger: Ledger;
   private readonly now: () => Date;
+  private serverToolNames: Promise<Set<string>> | null = null;
 
   constructor(client: Client, options: ChangeRequestsClientOptions) {
     this.client = client;
@@ -319,28 +358,91 @@ export class ChangeRequestsClient {
   /**
    * Looks at any result from this server. When it announces updates and the client may
    * act on them, reads the inbox. When the client must not act (no consent, ephemeral),
-   * removes the notice line so the model never sees it (SEP section 9).
+   * removes the notice line so the model never sees it (SEP section 9). Also returns the
+   * notice line and the content to show the model, as modelContent() does.
    */
-  async inspect<R extends { content?: unknown[]; _meta?: Record<string, unknown> }>(result: R): Promise<Inspection<R>> {
-    const fromMeta = (result._meta?.[this.extensionId] as { updates?: unknown } | undefined)?.updates;
-    let updates = typeof fromMeta === "number" ? fromMeta : 0;
-    const content = Array.isArray(result.content) ? result.content : [];
-    const isNotice = (c: unknown) => {
-      const text = (c as { type?: string; text?: string }).text;
-      return (c as { type?: string }).type === "text" && typeof text === "string" && NOTICE_LINE.test(text);
-    };
-    if (updates === 0) {
-      const line = content.find(isNotice) as { text: string } | undefined;
-      const match = line ? NOTICE_LINE.exec(line.text) : null;
-      if (match) updates = Number(match[1]);
-    }
+  async inspect<R extends ToolResultLike>(result: R): Promise<Inspection<R>> {
+    const updates = this.announced(result);
+    // Work out the line before reading the inbox: reading it clears the server's count.
+    const notice = await this.noticeLine(result);
+    const modelContent = this.render(result, notice);
     if (!allowed(this.options)) {
-      return { updates: 0, result: { ...result, content: content.filter((c) => !isNotice(c)) } };
+      const content = Array.isArray(result.content) ? result.content : [];
+      return { updates: 0, result: { ...result, content: content.filter((c) => !isNoticeBlock(c)) }, notice, modelContent };
     }
     if (updates > 0 && this.enabled()) {
-      return { updates, result, inbox: await this.checkInbox() };
+      return { updates, result, inbox: await this.checkInbox(), notice, modelContent };
     }
-    return { updates, result };
+    return { updates, result, notice, modelContent };
+  }
+
+  /**
+   * The update notice line the model should see for this result, or null (SEP section 7).
+   * Null when the client must withhold the notice (no consent, ephemeral: section 9) or no
+   * update is announced. Reuses the server's own line when the text carries one. Otherwise
+   * builds the fixed line from the _meta count, naming inboxToolName, or the server's
+   * change_requests_list when the server lists it. The line never carries request content.
+   */
+  async noticeLine(result: ToolResultLike): Promise<string | null> {
+    if (!allowed(this.options)) return null;
+    const content = Array.isArray(result.content) ? result.content : [];
+    const serverLine = content.find(isNoticeBlock) as { text: string } | undefined;
+    if (serverLine) return serverLine.text;
+    const count = this.announced(result);
+    if (count <= 0) return null;
+    const tool = this.options.inboxToolName ?? ((await this.serverHasTool(DEFAULT_INBOX_TOOL)) ? DEFAULT_INBOX_TOOL : null);
+    return tool ? updateNoticeLine(count, tool) : null;
+  }
+
+  /**
+   * What a host should show the model for a tool result. A host that shows the model a
+   * tool's structuredContent in place of its text drops the server's notice line, so the
+   * duty to carry it falls on the client (SEP section 7). This returns the structured
+   * content as JSON text followed by the notice line, or, for a result without structured
+   * content, its text with the notice line removed when the client must withhold it.
+   */
+  async modelContent(result: ToolResultLike): Promise<{ type: "text"; text: string }[]> {
+    return this.render(result, await this.noticeLine(result));
+  }
+
+  private render(result: ToolResultLike, notice: string | null): { type: "text"; text: string }[] {
+    const content = Array.isArray(result.content) ? result.content : [];
+    if (result.structuredContent !== undefined && result.structuredContent !== null) {
+      const blocks = [{ type: "text" as const, text: JSON.stringify(result.structuredContent) }];
+      if (notice) blocks.push({ type: "text", text: notice });
+      return blocks;
+    }
+    const text = textBlocks(content.filter((c) => !isNoticeBlock(c)));
+    if (notice) text.push({ type: "text", text: notice });
+    return text;
+  }
+
+  /** The update count a result announces, from _meta or else from the text line. */
+  private announced(result: ToolResultLike): number {
+    const fromMeta = (result._meta?.[this.extensionId] as { updates?: unknown } | undefined)?.updates;
+    if (typeof fromMeta === "number" && fromMeta > 0) return fromMeta;
+    const content = Array.isArray(result.content) ? result.content : [];
+    const line = content.find(isNoticeBlock) as { text: string } | undefined;
+    const match = line ? NOTICE_LINE.exec(line.text) : null;
+    return match ? Number(match[1]) : 0;
+  }
+
+  private async serverHasTool(name: string): Promise<boolean> {
+    if (!this.client.getServerCapabilities()?.tools) return false;
+    this.serverToolNames ??= (async () => {
+      const names = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await this.client.listTools(cursor ? { cursor } : {});
+        for (const tool of page.tools) names.add(tool.name);
+        cursor = page.nextCursor;
+      } while (cursor);
+      return names;
+    })().catch(() => {
+      this.serverToolNames = null;
+      return new Set<string>();
+    });
+    return (await this.serverToolNames).has(name);
   }
 
   /**

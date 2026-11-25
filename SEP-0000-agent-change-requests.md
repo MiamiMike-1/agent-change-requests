@@ -455,7 +455,7 @@ Tasker's MCP server, the source of the evidence in the README, has implemented t
 
 **What is still missing.**
 
-- A recorded run that closes the loop on the notice alone. In the [recorded Claude Code run](packages/demo/recordings/claude-code-2026-11-25), the model filed a request unprompted and, once told which request it had filed, confirmed the shipped fix. Without that hint it never saw the update notice, because the client showed the model the tool's structured content in place of its text. Section 7 now makes carrying the notice in that case a client duty, and no client in the run implements it yet.
+- A recorded run that closes the loop on the notice alone. In the [recorded Claude Code run](packages/demo/recordings/claude-code-2026-11-25), the model filed a request unprompted and, once told which request it had filed, confirmed the shipped fix. Without that hint it never saw the update notice, because the client showed the model the tool's structured content in place of its text. Section 7 now makes carrying the notice in that case a client duty. The client package implements it from 0.2.0 (`modelContent()`), but Claude Code, the client in the run, does not.
 - The changes feed (Section 12).
 - Anonymous callers and tickets. The server package does not accept them.
 - Delivery over the Events extension, which waits on an Events implementation in the SDK.

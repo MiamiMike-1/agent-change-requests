@@ -22,3 +22,16 @@ export {
   type HealthReport,
   type StoreHealth,
 } from "./health.js";
+export {
+  UpstreamRelay,
+  GitHubIssueSink,
+  DEFAULT_UPSTREAM_REPO,
+  issueBody,
+  upstreamRequest,
+  type UpstreamSink,
+  type UpstreamRequest,
+  type UpstreamState,
+  type UpstreamRelayOptions,
+  type GitHubIssueSinkOptions,
+  type SyncReport,
+} from "./upstream.js";

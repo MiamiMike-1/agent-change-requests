@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+**SEP**
+
+- Section 3: a new target type, `extension`, for requests about an extension itself, with an optional `component`. Servers must accept these, should relay them to the extension's maintainers without requester identity or task context, and should carry the answer back through the inbox. Rationale and Security Implications explain the relay.
+
+**Server package**
+
+- `target.type` accepts `extension`, with `target.component`. A request that targets the change requests extension under any vendor prefix is marked `about: "spec"`.
+- New `UpstreamRelay` and `GitHubIssueSink`: forward spec requests to GitHub issues (default: this repository) and sync each issue's state back as `shipped` or `declined`.
+- `ChangeRequestService` gains `setUpstream()` and `recordOf()` for the builder side.
+
+**Client package**
+
+- `Target` accepts `extension` and `component`. `component` is redacted like `name`, and the open-request check compares it.
+
 ## Reference implementation (November 25, 2026)
 
 The three parts the SEP's Reference Implementation section plans, built on `@modelcontextprotocol/sdk` 1.x.

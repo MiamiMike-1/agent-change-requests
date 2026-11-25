@@ -40,11 +40,26 @@ export type Origin = "agent" | "principal";
  */
 export type About = "app" | "spec";
 
-export type TargetType = "tool" | "resource" | "prompt" | "server";
+export type TargetType = "tool" | "resource" | "prompt" | "server" | "extension";
 
 export interface Target {
   type: TargetType;
+  /** The tool, resource, or prompt name, or for type extension the extension identifier. */
   name?: string;
+  /**
+   * For type extension only: which part of the extension, as its maintainers name them.
+   * For this extension: spec, server-sdk, or client-sdk.
+   */
+  component?: string;
+}
+
+/** Where a request was relayed to, for one about an extension (see UpstreamRelay). */
+export interface UpstreamLink {
+  /** The sink's own reference, for example "owner/repo#12". */
+  ref: string;
+  /** A public link to the forwarded copy, when there is one. */
+  url?: string;
+  forwardedAt: string;
 }
 
 export interface Attempt {
@@ -157,6 +172,8 @@ export interface ChangeRequestRecord {
   pickedUp: boolean;
   /** What submit first returned, so a repeated idempotency key gets the same answer. */
   firstResult: SubmitResult;
+  /** Set once the request was relayed to an extension's maintainers. */
+  upstream?: UpstreamLink;
   /** Bumped on every write. Stores use it to refuse a write based on a stale read. */
   revision: number;
   createdAt: string;

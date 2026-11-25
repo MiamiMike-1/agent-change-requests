@@ -12,7 +12,7 @@ export const LIMITS = {
   message: 1000,
 } as const;
 
-const TARGET_TYPES = ["tool", "resource", "prompt", "server"];
+const TARGET_TYPES = ["tool", "resource", "prompt", "server", "extension"];
 const TEST_METHODS = ["tools/call", "resources/read", "prompts/get"];
 const FREQUENCIES = ["once", "recurring"];
 const SEVERITIES = ["low", "medium", "high"];
@@ -99,6 +99,10 @@ export function validateSubmit(input: unknown, options: ValidateOptions): Submit
     if (input.target.type === undefined) fail("target.type is required.");
     if (input.target.type !== "server") requireString(input.target.name, "target.name", 200);
     else optionalString(input.target.name, "target.name", 200);
+    if (input.target.component !== undefined) {
+      if (input.target.type !== "extension") fail("target.component is allowed only when target.type is extension.");
+      requireString(input.target.component, "target.component", 100);
+    }
   }
 
   if (input.context !== undefined) {

@@ -16,8 +16,11 @@ export type Status =
 export const TERMINAL_STATUSES: readonly Status[] = ["shipped", "declined", "duplicate", "withdrawn"];
 
 export interface Target {
-  type: "tool" | "resource" | "prompt" | "server";
+  type: "tool" | "resource" | "prompt" | "server" | "extension";
+  /** The tool, resource, or prompt name, or for type extension the extension identifier. */
   name?: string;
+  /** For type extension only: spec, server-sdk, or client-sdk for this extension. */
+  component?: string;
 }
 
 export interface AcceptanceTest {

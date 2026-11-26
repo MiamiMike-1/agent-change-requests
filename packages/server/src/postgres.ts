@@ -97,7 +97,10 @@ export class PostgresStore implements ChangeRequestStore, ChangeFeedStore {
     if (principal !== null) add((n) => `principal = $${n}`, principal);
     if (query.status) {
       if (query.status.length === 0) return { items: [] };
-      add((n) => `status = any($${n}::text[])`, query.status);
+      // One placeholder per status: drivers disagree on how to send an array parameter.
+      const first = params.length + 1;
+      params.push(...query.status);
+      where.push(`status in (${query.status.map((_, i) => `$${first + i}`).join(", ")})`);
     }
     if (query.about) add((n) => `about = $${n}`, query.about);
     if (query.updatedSince) add((n) => `updated_at >= $${n}::timestamptz`, iso(query.updatedSince));

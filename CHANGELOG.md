@@ -13,6 +13,13 @@
 - New `changeRequestsFetchHandler` in `@agent-change-requests/server/fetch`: the whole extension as one `(Request) => Promise<Response>` function for Deno, Supabase Edge Functions, Workers, Bun, or Node. It is stateless, takes a body size limit and an `allow` hook, and ships a simple `rateLimiter`.
 - `UpstreamRelay.forwardPending()` retries requests that could not be relayed, for example when the sink was down or a cap was reached.
 
+**Server package 0.5.1**
+
+Two fixes found by running a maintainers' endpoint on a serverless host.
+
+- `changeRequestsFetchHandler` answers GET and DELETE with 405. It keeps no session, so it has no event stream to offer, and the stream a GET used to open never finished. A host that waits for the whole response hung on it. MCP clients send that GET after `initialize`.
+- `PostgresStore` sends records as text (`$n::text::jsonb`). With a bare `::jsonb` parameter, drivers such as postgres.js encoded the JSON a second time and stored a quoted string. Reads still worked, but SQL could not look inside the record, so the time reported with a rate-limit refusal was wrong. Rows stored the old way still read correctly.
+
 ## Requests about an extension itself (November 25, 2026)
 
 Shipped in server 0.4.0 and client 0.3.0, with the changes feed below.

@@ -18,9 +18,18 @@ function iso(value: string): string {
   return value;
 }
 
-/** Drivers return jsonb parsed or as text, depending on their type settings. */
+/**
+ * Records are written as $n::text::jsonb. With a bare ::jsonb some drivers, postgres.js
+ * among them, see a jsonb parameter and encode the JSON text a second time, which stores
+ * a quoted string that SQL cannot look inside.
+ *
+ * Drivers return jsonb parsed or as text, depending on their type settings.
+ */
 function parse<T>(value: unknown): T {
-  return (typeof value === "string" ? JSON.parse(value) : value) as T;
+  let parsed = value;
+  // Twice at most: a row written before records were sent as text can hold a quoted string.
+  for (let i = 0; i < 2 && typeof parsed === "string"; i++) parsed = JSON.parse(parsed);
+  return parsed as T;
 }
 
 export class PostgresStore implements ChangeRequestStore, ChangeFeedStore {
@@ -35,7 +44,7 @@ export class PostgresStore implements ChangeRequestStore, ChangeFeedStore {
     await this.query(
       `insert into acr_change_requests
          (request_id, principal, idempotency_key, status, about, unread, revision, created_at, updated_at, record)
-       values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9::timestamptz, $10::jsonb)`,
+       values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9::timestamptz, $10::text::jsonb)`,
       [
         record.requestId,
         record.principal,
@@ -54,7 +63,7 @@ export class PostgresStore implements ChangeRequestStore, ChangeFeedStore {
   async update(record: ChangeRequestRecord, expectedRevision: number): Promise<boolean> {
     const changed = await this.query(
       `update acr_change_requests
-          set status = $1, about = $2, unread = $3, revision = $4, updated_at = $5::timestamptz, record = $6::jsonb
+          set status = $1, about = $2, unread = $3, revision = $4, updated_at = $5::timestamptz, record = $6::text::jsonb
         where request_id = $7 and revision = $8
         returning request_id`,
       [
@@ -186,7 +195,7 @@ export class PostgresStore implements ChangeRequestStore, ChangeFeedStore {
 
   async appendChange(change: Omit<ChangeRecord, "seq">): Promise<ChangeRecord> {
     const rows = await this.query(
-      "insert into acr_change_feed (change_id, record) values ($1, $2::jsonb) returning seq",
+      "insert into acr_change_feed (change_id, record) values ($1, $2::text::jsonb) returning seq",
       [change.changeId, JSON.stringify(change)],
     );
     return { ...change, seq: Number(rows[0]?.seq) };

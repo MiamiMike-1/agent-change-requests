@@ -16,6 +16,7 @@ Draft of November 22, 2026 · Mike Lingle
 | Targets | MCP specification 2026-07-28 and later |
 | PR | Not yet opened |
 | Builds on | SEP-3415 Events Extension (optional, for push delivery) |
+| Requests about this extension | [Issues in the draft's repository](https://github.com/MiamiMike-1/agent-change-requests/issues), labeled `agent-change-request`. Servers that relay requests about this extension (Section 3) send them there. This moves to the official specification repository if the SEP is accepted. |
 | Related discussion | GitHub Discussion #2369, Opt-In Client Experience Feedback Mechanism for MCP Server Maintainers |
 
 ## Abstract
@@ -193,7 +194,7 @@ Normative requirements:
 - A server that implements this extension MUST accept `extension` targets on the same terms as any other request. It MUST NOT reject one because the server does not maintain that extension.
 - A server SHOULD relay such a request to the extension's maintainers when it has a way to, and SHOULD carry their answer back as an ordinary status change, so the requester learns the outcome through its own inbox (Section 7).
 - A relayed copy MUST NOT carry the principal or any other requester identity. It SHOULD carry only `kind`, `title`, `description`, `target`, `failureMode`, and `impact`, and MUST NOT carry `context` or acceptance tests unless the server's published policy says they are relayed. A server that relays to a public location MUST say so at `policyUri`.
-- An extension's specification SHOULD say where its maintainers accept relayed requests. A server MUST NOT relay a request for an extension whose maintainers have named no such place.
+- An extension's specification SHOULD say where its maintainers accept relayed requests. This one does so in its Preamble. A server MUST NOT relay a request for an extension whose maintainers have named no such place.
 - When a relayed request ships, the server SHOULD set `resolution.availability` to `all` and `changelogUri` to the maintainers' record of the change.
 
 `kind` says what the requester wants. `failureMode` says how the surface failed, so that the same mechanism can be counted across tools and servers. The base failure modes are:

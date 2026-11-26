@@ -50,8 +50,9 @@ export interface UpstreamRelayOptions {
   sinks: Record<string, UpstreamSink>;
   /**
    * The identifier this server uses for the change requests extension. When set, a
-   * request marked about "spec" that does not use an extension target (for example one
-   * that targets a change_requests tool) goes to that extension's sink.
+   * request marked about "spec" goes to that extension's sink even when it names no
+   * extension target (for example one that targets a change_requests tool), or names
+   * the change requests extension under another vendor's prefix.
    */
   extensionId?: string;
   /** Shown to maintainers as the relaying server. */
@@ -245,9 +246,12 @@ export class UpstreamRelay {
 
   /** The extension a request is about, if any. */
   private extensionFor(record: ChangeRequestRecord): string | undefined {
-    if (record.target?.type === "extension") return record.target.name;
+    const named = record.target?.type === "extension" ? record.target.name : undefined;
+    if (named !== undefined && this.sinks[named]) return named;
+    // The change requests extension has a different vendor prefix on every server until
+    // its identifier is approved, so a request about it may name a prefix with no sink.
     if (record.about === "spec") return this.extensionId;
-    return undefined;
+    return named;
   }
 }
 

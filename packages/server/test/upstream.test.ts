@@ -128,6 +128,14 @@ describe("UpstreamRelay", () => {
     expect(sink.forwarded).toHaveLength(2);
   });
 
+  it("sends a request about the extension under another vendor prefix to extensionId's sink", async () => {
+    const { service } = makeService();
+    const sink = new FakeSink();
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: sink }, extensionId: EXT });
+    const { requestId } = await service.submit("user_a", specRequest({ target: { type: "extension", name: "com.other/change-requests" } }));
+    expect((await relay.forward(requestId))?.extension).toBe(EXT);
+  });
+
   it("does not forward requests about the app", async () => {
     const { service } = makeService();
     const sink = new FakeSink();

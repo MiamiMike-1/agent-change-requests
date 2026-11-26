@@ -184,7 +184,9 @@ const relay = new UpstreamRelay({
 });
 relay.attach(); // forwards each new spec request after submit answers
 
-// On a schedule: shipped upstream -> shipped here, declined upstream -> declined here.
+// On a schedule: retry what could not be sent, then read the answers.
+// Shipped upstream -> shipped here, declined upstream -> declined here.
+await relay.forwardPending();
 await relay.sync();
 ```
 
@@ -194,19 +196,45 @@ The relay sends only `kind`, `title`, `description`, `target`, `failureMode`, an
 
 ### Running a maintainers' endpoint
 
-If you maintain an extension, the place you accept requests is this same package with anonymous callers on:
+If you maintain an extension, the place you accept requests is this same package with anonymous callers on. `changeRequestsFetchHandler` gives you the whole endpoint as one `(Request) => Promise<Response>` function, which runs on Deno, Supabase Edge Functions, Cloudflare Workers, Bun, or Node, with no process to keep alive:
 
 ```ts
-installChangeRequests(server, {
+import { changeRequestsFetchHandler, rateLimiter } from "@agent-change-requests/server/fetch";
+import { PostgresStore } from "@agent-change-requests/server/postgres";
+
+const { handler, service } = changeRequestsFetchHandler({
   appName: "Example extension maintainers",
   extensionId: "com.example/change-requests",
   getPrincipal: () => null, // every relaying server is an anonymous caller
   anonymous: true,
   anonymousDailyCap: 200,
+  legacyTools: false,
+  store: new PostgresStore((text, params) => pool.query(text, params).then((r) => r.rows)),
+  allow: rateLimiter({ limit: 30 }), // per address, per minute
+  maxBodyBytes: 65_536,
 });
+
+Deno.serve(handler); // or export default { fetch: handler }
 ```
 
-Serve it over Streamable HTTP and name its URL in your extension's specification. Triage with `service.listAll()` and `service.transition()`; relaying servers pick up each answer by ticket. To work from an issue tracker instead, mirror requests into it on your side: attach an `UpstreamRelay` to the endpoint's own service with a `GitHubIssueSink` (`repo` and a token only you hold) under your extension's identifier. Each request becomes an issue, and closing the issue answers the request. Any `UpstreamSink` can do the same for another tracker.
+Name the URL in your extension's specification. Triage with `service.listAll()` and `service.transition()`; relaying servers pick up each answer by ticket.
+
+An anonymous endpoint will receive junk. Plan for it:
+
+- **Volume.** `anonymousDailyCap` bounds what is stored in a day, and anonymous callers count as one principal toward `demand`. One caller could use the whole cap, so put a per-address limit in front of it with `allow`. `rateLimiter` keeps its counts in memory, which limits little on hosts that start a fresh instance per request; use your platform's limiter there.
+- **Untrusted text.** Every field was written by a model you know nothing about. Never give request text to an agent that can act on it. Summarize and label with a model if you like, and keep a person on anything that changes code.
+- **Publishing.** To work from an issue tracker, mirror requests into it on your side with an `UpstreamRelay` on the endpoint's own service and a `GitHubIssueSink` (`repo` and a token only you hold) under your extension's identifier. Do not call `attach()` there, which would publish every submission as it arrives. Call `relay.forward(requestId)` for the requests you approve, so nothing reaches a public tracker unread. Closing the issue then answers the request.
+
+## Postgres store
+
+`PostgresStore` in `@agent-change-requests/server/postgres` keeps requests and the changes feed in the tables from [`migrations/postgres.sql`](migrations/postgres.sql), Supabase included. It takes a function that runs one parameterized query and returns the rows, so it works with any driver:
+
+```ts
+new PostgresStore((text, params) => pool.query(text, params).then((r) => r.rows)); // node-postgres
+new PostgresStore((text, params) => sql.unsafe(text, params)); // postgres.js
+```
+
+It passes the store conformance suites below.
 
 ## Store conformance
 
@@ -277,7 +305,6 @@ The workflow publishes through npm trusted publishing, so no npm token is stored
 
 - MCP Events delivery itself. The SDK has no Events implementation yet, so `publishEvent` hands each `changeRequest.updated` event to yours.
 - Evaluating acceptance tests. They are stored as data and never run.
-- A Postgres or Supabase store. The schema is here, and the adapter comes with the first app that uses it.
 
 ## License
 

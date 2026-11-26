@@ -180,6 +180,34 @@ export class UpstreamRelay {
     return report;
   }
 
+  /**
+   * Forwards every open request that should have been relayed and was not, for example
+   * because the sink was down or a cap was reached. Run it with sync(). It stops at the
+   * first failure, so a cap that is still in force is not hit again and again.
+   */
+  async forwardPending(): Promise<string[]> {
+    const pending: ChangeRequestRecord[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.service.listAll(cursor ? { cursor } : {});
+      for (const r of page.items) {
+        const extension = this.extensionFor(r);
+        if (!r.upstream && !isTerminal(r.status) && extension !== undefined && this.sinks[extension]) pending.push(r);
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    const forwarded: string[] = [];
+    for (const record of pending.reverse()) {
+      try {
+        if (await this.forward(record.requestId)) forwarded.push(record.requestId);
+      } catch (error) {
+        this.onError(error, record.requestId);
+        break;
+      }
+    }
+    return forwarded;
+  }
+
   private async forwardOnce(requestId: string): Promise<UpstreamLink | null> {
     const record = await this.service.recordOf(requestId);
     if (record.upstream) return record.upstream;

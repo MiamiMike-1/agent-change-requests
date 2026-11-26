@@ -111,6 +111,23 @@ describe("UpstreamRelay", () => {
     expect((await withId.forward(requestId))?.extension).toBe(EXT);
   });
 
+  it("forwards what was missed once the sink is back", async () => {
+    const { service } = makeService();
+    const sink = new FakeSink();
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: sink } });
+    relay.attach();
+    sink.fail = true;
+    const a = await service.submit("user_a", specRequest({ title: "One" }));
+    const b = await service.submit("user_a", specRequest({ title: "Two" }));
+    await service.submit("user_a", request());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await relay.forwardPending()).toEqual([]);
+    sink.fail = false;
+    expect((await relay.forwardPending()).sort()).toEqual([a.requestId, b.requestId].sort());
+    expect(await relay.forwardPending()).toEqual([]);
+    expect(sink.forwarded).toHaveLength(2);
+  });
+
   it("does not forward requests about the app", async () => {
     const { service } = makeService();
     const sink = new FakeSink();

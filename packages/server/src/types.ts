@@ -55,6 +55,8 @@ export interface Target {
 
 /** Where a request was relayed to, for one about an extension (see UpstreamRelay). */
 export interface UpstreamLink {
+  /** The extension identifier the request was relayed for; names the sink. */
+  extension: string;
   /** The sink's own reference, for example "owner/repo#12". */
   ref: string;
   /** A public link to the forwarded copy, when there is one. */

@@ -9,7 +9,7 @@
 **Server package**
 
 - `target.type` accepts `extension`, with `target.component`. A request that targets the change requests extension under any vendor prefix is marked `about: "spec"`.
-- New `UpstreamRelay` and `GitHubIssueSink`: forward spec requests to GitHub issues (default: this repository) and sync each issue's state back as `shipped` or `declined`.
+- New `UpstreamRelay` and `GitHubIssueSink`: forward requests about any extension to the tracker its maintainers name, one sink per extension identifier, and sync each issue's state back as `shipped` or `declined`.
 - `ChangeRequestService` gains `setUpstream()` and `recordOf()` for the builder side.
 
 **Client package**

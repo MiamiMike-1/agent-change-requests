@@ -38,7 +38,6 @@ export {
 export {
   UpstreamRelay,
   GitHubIssueSink,
-  DEFAULT_UPSTREAM_REPO,
   issueBody,
   upstreamRequest,
   type UpstreamSink,

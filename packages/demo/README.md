@@ -9,7 +9,7 @@ A small MCP server with one deliberate gap, and a run of the whole change reques
 ```ts
 const changeRequests = installChangeRequests(server, {
   appName: "Invoices",
-  extensionId: "com.rocketproforma/change-requests",
+  extensionId: "com.example/change-requests",
   store: options.store, // a SQLite file
   getPrincipal: () => options.principal,
   policyUri: "https://github.com/MiamiMike-1/agent-change-requests",

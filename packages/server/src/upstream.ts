@@ -41,9 +41,19 @@ export interface UpstreamSink {
 
 export interface UpstreamRelayOptions {
   service: ChangeRequestService;
-  sink: UpstreamSink;
-  /** Which requests to relay. Default: requests about the spec. */
-  shouldForward?: (record: ChangeRequestRecord) => boolean;
+  /**
+   * Where each extension's maintainers accept requests, keyed by extension identifier,
+   * for example { "io.modelcontextprotocol/change-requests": sink }. A request with
+   * target type extension goes to the sink for its target.name. Extensions with no
+   * entry are not relayed.
+   */
+  sinks: Record<string, UpstreamSink>;
+  /**
+   * The identifier this server uses for the change requests extension. When set, a
+   * request marked about "spec" that does not use an extension target (for example one
+   * that targets a change_requests tool) goes to that extension's sink.
+   */
+  extensionId?: string;
   /** Shown to maintainers as the relaying server. */
   serverName?: string;
   /**
@@ -79,8 +89,8 @@ export function upstreamRequest(record: ChangeRequestRecord, serverName?: string
 
 export class UpstreamRelay {
   private readonly service: ChangeRequestService;
-  private readonly sink: UpstreamSink;
-  private readonly shouldForward: (record: ChangeRequestRecord) => boolean;
+  private readonly sinks: Record<string, UpstreamSink>;
+  private readonly extensionId: string | undefined;
   private readonly serverName: string | undefined;
   private readonly onError: (error: unknown, requestId: string) => void;
   private readonly now: () => Date;
@@ -90,8 +100,8 @@ export class UpstreamRelay {
 
   constructor(options: UpstreamRelayOptions) {
     this.service = options.service;
-    this.sink = options.sink;
-    this.shouldForward = options.shouldForward ?? ((r) => r.about === "spec");
+    this.sinks = { ...options.sinks };
+    this.extensionId = options.extensionId;
     this.serverName = options.serverName;
     this.onError = options.onError ?? (() => {});
     this.now = options.now ?? (() => new Date());
@@ -139,9 +149,11 @@ export class UpstreamRelay {
 
     for (const record of open) {
       const link = record.upstream as UpstreamLink;
+      const sink = this.sinks[link.extension];
+      if (!sink) continue;
       report.checked += 1;
       try {
-        const state = await this.sink.poll(link.ref);
+        const state = await sink.poll(link.ref);
         if (state.state === "shipped") {
           const resolution: { availability: "all"; changelogUri?: string } = { availability: "all" };
           const uri = state.url ?? link.url;
@@ -171,7 +183,9 @@ export class UpstreamRelay {
   private async forwardOnce(requestId: string): Promise<UpstreamLink | null> {
     const record = await this.service.recordOf(requestId);
     if (record.upstream) return record.upstream;
-    if (isTerminal(record.status) || !this.shouldForward(record)) return null;
+    const extension = this.extensionFor(record);
+    const sink = extension === undefined ? undefined : this.sinks[extension];
+    if (isTerminal(record.status) || extension === undefined || !sink) return null;
     const nowMs = this.now().getTime();
     this.sentAt = this.sentAt.filter((t) => nowMs - t < 24 * 60 * 60 * 1000);
     if (this.maxPerDay > 0 && this.sentAt.length >= this.maxPerDay) {
@@ -179,8 +193,8 @@ export class UpstreamRelay {
     }
     this.sentAt.push(nowMs);
 
-    const sent = await this.sink.forward(upstreamRequest(record, this.serverName));
-    const link: UpstreamLink = { ref: sent.ref, forwardedAt: this.now().toISOString() };
+    const sent = await sink.forward(upstreamRequest(record, this.serverName));
+    const link: UpstreamLink = { extension, ref: sent.ref, forwardedAt: this.now().toISOString() };
     if (sent.url) link.url = sent.url;
     await this.service.setUpstream(requestId, link);
 
@@ -200,13 +214,20 @@ export class UpstreamRelay {
     }
     return link;
   }
+
+  /** The extension a request is about, if any. */
+  private extensionFor(record: ChangeRequestRecord): string | undefined {
+    if (record.target?.type === "extension") return record.target.name;
+    if (record.about === "spec") return this.extensionId;
+    return undefined;
+  }
 }
 
 // ---- GitHub Issues sink --------------------------------------------------
 
 export interface GitHubIssueSinkOptions {
-  /** owner/name. Default: the repository that holds this extension's SEP. */
-  repo?: string;
+  /** owner/name: the repository where the extension's maintainers accept requests. */
+  repo: string;
   /** A token that can create issues in repo. Supplied by the server operator. */
   token: string;
   /** Labels for new issues. Default ["agent-change-request"]. */
@@ -215,8 +236,6 @@ export interface GitHubIssueSinkOptions {
   apiBase?: string;
   fetch?: typeof fetch;
 }
-
-export const DEFAULT_UPSTREAM_REPO = "MiamiMike-1/agent-change-requests";
 
 /** Stops agent text from pinging people or teams in the maintainers' tracker. */
 function neutralize(text: string): string {
@@ -282,8 +301,8 @@ export class GitHubIssueSink implements UpstreamSink {
 
   constructor(options: GitHubIssueSinkOptions) {
     if (!options.token) throw new Error("GitHubIssueSink needs a token.");
-    this.repo = options.repo ?? DEFAULT_UPSTREAM_REPO;
-    if (!/^[\w.-]+\/[\w.-]+$/.test(this.repo)) throw new Error("repo must be owner/name.");
+    this.repo = options.repo;
+    if (typeof this.repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(this.repo)) throw new Error("repo must be owner/name.");
     this.token = options.token;
     this.labels = options.labels ?? ["agent-change-request"];
     this.apiBase = (options.apiBase ?? "https://api.github.com").replace(/\/+$/, "");

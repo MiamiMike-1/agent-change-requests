@@ -13,7 +13,7 @@ import { installChangeRequests } from "@agent-change-requests/server/middleware"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-export const EXTENSION_ID = "com.rocketproforma/change-requests";
+export const EXTENSION_ID = "com.example/change-requests";
 export const FIXED_IN = "1.1.0";
 const PAGE_SIZE = 50;
 
@@ -55,7 +55,7 @@ export function createInvoiceServer(options: DemoServerOptions) {
     extensionId: EXTENSION_ID,
     store: options.store,
     getPrincipal: () => options.principal,
-    policyUri: "https://github.com/MiamiMike-1/agent-change-requests",
+    policyUri: "https://example.com/change-requests-policy",
   });
   // -------------------------------------------------------------------------
 

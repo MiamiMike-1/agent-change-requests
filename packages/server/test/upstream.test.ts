@@ -17,6 +17,8 @@ class FakeSink implements UpstreamSink {
   }
 }
 
+const EXT = "com.example/change-requests";
+
 const specRequest = (overrides: Record<string, unknown> = {}) =>
   request({
     kind: "friction",
@@ -52,7 +54,7 @@ describe("UpstreamRelay", () => {
   it("forwards spec requests once, without identity or context, and tells the requester", async () => {
     const { service } = makeService();
     const sink = new FakeSink();
-    const relay = new UpstreamRelay({ service, sink, serverName: "Example" });
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: sink }, serverName: "Example" });
     const { requestId } = await service.submit("user_a", specRequest());
 
     const link = await relay.forward(requestId);
@@ -73,7 +75,7 @@ describe("UpstreamRelay", () => {
   it("caps how many requests it forwards a day", async () => {
     const { service } = makeService({ dailyCap: 0 });
     const sink = new FakeSink();
-    const relay = new UpstreamRelay({ service, sink, maxPerDay: 1 });
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: sink }, maxPerDay: 1 });
     const a = await service.submit("user_a", specRequest({ title: "One" }));
     const b = await service.submit("user_b", specRequest({ title: "Two" }));
     await relay.forward(a.requestId);
@@ -81,10 +83,33 @@ describe("UpstreamRelay", () => {
     expect(sink.forwarded).toHaveLength(1);
   });
 
+  it("routes by extension, and relays only extensions that have a sink", async () => {
+    const { service } = makeService();
+    const ours = new FakeSink();
+    const events = new FakeSink();
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: ours, "io.example/events": events } });
+    const a = await service.submit("user_a", specRequest({ target: { type: "extension", name: "io.example/events" } }));
+    const b = await service.submit("user_a", specRequest({ target: { type: "extension", name: "io.example/unknown" } }));
+    expect((await relay.forward(a.requestId))?.extension).toBe("io.example/events");
+    expect(await relay.forward(b.requestId)).toBeNull();
+    expect(events.forwarded).toHaveLength(1);
+    expect(ours.forwarded).toHaveLength(0);
+  });
+
+  it("sends spec requests that target a change_requests tool to extensionId's sink", async () => {
+    const { service } = makeService();
+    const sink = new FakeSink();
+    const without = new UpstreamRelay({ service, sinks: { [EXT]: sink } });
+    const { requestId } = await service.submit("user_a", request({ target: { type: "tool", name: "change_requests_list" } }));
+    expect(await without.forward(requestId)).toBeNull();
+    const withId = new UpstreamRelay({ service, sinks: { [EXT]: sink }, extensionId: EXT });
+    expect((await withId.forward(requestId))?.extension).toBe(EXT);
+  });
+
   it("does not forward requests about the app", async () => {
     const { service } = makeService();
     const sink = new FakeSink();
-    const relay = new UpstreamRelay({ service, sink });
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: sink } });
     const { requestId } = await service.submit("user_a", request());
     expect(await relay.forward(requestId)).toBeNull();
     expect(sink.forwarded).toHaveLength(0);
@@ -94,7 +119,7 @@ describe("UpstreamRelay", () => {
     const { service } = makeService();
     const sink = new FakeSink();
     const errors: unknown[] = [];
-    const relay = new UpstreamRelay({ service, sink, onError: (e) => errors.push(e) });
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: sink }, onError: (e) => errors.push(e) });
     const stop = relay.attach();
     await service.submit("user_a", specRequest());
     await new Promise((r) => setTimeout(r, 0));
@@ -111,7 +136,7 @@ describe("UpstreamRelay", () => {
   it("syncs shipped and declined answers back into the inbox", async () => {
     const { service } = makeService();
     const sink = new FakeSink();
-    const relay = new UpstreamRelay({ service, sink });
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: sink } });
     const a = await service.submit("user_a", specRequest({ title: "One" }));
     const b = await service.submit("user_a", specRequest({ title: "Two" }));
     const c = await service.submit("user_a", specRequest({ title: "Three" }));

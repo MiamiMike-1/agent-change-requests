@@ -14,7 +14,7 @@ It handles the parts every server needs the same way:
 - **Update notice:** a count in `_meta` and one plain line of text on every tool result while an update is unread.
 - **What's new:** a version-keyed changes feed (SEP section 12) of everything the server ships, whoever asked for it, with a notice for unread breaking changes and deprecations that each caller can turn off.
 - **Anonymous callers (opt in):** requests without a signed-in principal, each answered with a ticket that reads that one request.
-- **Requests one level up (opt in):** requests about an extension itself, relayed to the tracker its maintainers name, with the answer synced back to the requester.
+- **Requests one level up (opt in):** requests about an extension itself, relayed to the endpoint its maintainers name with no account or credential, and the answer synced back to the requester.
 - **Confirmation:** the requester's own verdict on a shipped change, kept separately from the server's claim, plus whether it adopted the change.
 - **Scorecard:** each request's stages and times, and the running numbers (time to live, build time, human time, confirmed fix rate, adoption, gaps).
 - **Health check:** a route that needs no credential and says whether the server can reach its store, without returning any data.
@@ -165,29 +165,48 @@ Because every server that uses this package computes the same scorecard and the 
 An agent can also file a request about the extension itself with `target: { type: "extension", name: "<extension id>", component: "spec" | "server-sdk" | "client-sdk" }`. Those are marked `spec` too. The same target works for any extension the server implements. To send them one level up, attach an `UpstreamRelay`:
 
 ```ts
-import { GitHubIssueSink, UpstreamRelay } from "@agent-change-requests/server";
+import { ChangeRequestsEndpointSink, UpstreamRelay } from "@agent-change-requests/server";
+import { endpointCaller } from "@agent-change-requests/server/endpoint";
 
+const extensionId = "com.example/change-requests";
 const relay = new UpstreamRelay({
   service,
-  // One sink per extension, keyed by its identifier: wherever that extension's
-  // maintainers say they accept requests.
+  // One sink per extension, keyed by its identifier: the endpoint that extension's
+  // maintainers name in its specification.
   sinks: {
-    "com.example/change-requests": new GitHubIssueSink({
-      repo: "example-org/change-requests-spec",
-      token: process.env.UPSTREAM_GITHUB_TOKEN!,
+    [extensionId]: new ChangeRequestsEndpointSink({
+      call: endpointCaller("https://maintainers.example.com/mcp", { extensionId }),
     }),
   },
   // Also relay spec requests that target a change_requests_* tool.
-  extensionId: "com.example/change-requests",
+  extensionId,
   serverName: "Example MCP",
 });
 relay.attach(); // forwards each new spec request after submit answers
 
-// On a schedule: closed as completed -> shipped, closed as not planned -> declined.
+// On a schedule: shipped upstream -> shipped here, declined upstream -> declined here.
 await relay.sync();
 ```
 
-The relay sends only `kind`, `title`, `description`, `target`, `failureMode`, and `impact`. It never sends the principal, `context`, or acceptance tests, and it neutralizes `@` mentions. It forwards at most 20 requests a day by default (`maxPerDay`). On forwarding, a `received` request moves to `triaged` with the issue link as its message, so the requester can follow it. The issue is public, so say so in your policy (SEP section 3). An extension with no entry in `sinks` is not relayed: its requests stay on this server like any other. The token must be able to create issues in each repository. For a tracker other than GitHub, write your own `UpstreamSink`.
+No account, token, or sign-up is involved. The relay submits to the maintainers' endpoint as an anonymous caller, keeps the ticket it gets back on the stored record (never in anything a caller reads), and `sync()` reads the answer with that ticket.
+
+The relay sends only `kind`, `title`, `description`, `target`, `failureMode`, and `impact`. It never sends the principal, `context`, or acceptance tests. It forwards at most 20 requests a day by default (`maxPerDay`). On forwarding, a `received` request moves to `triaged`, so the requester knows it was passed on. Say in your policy that you relay (SEP section 3). An extension with no entry in `sinks` is not relayed: its requests stay on this server like any other.
+
+### Running a maintainers' endpoint
+
+If you maintain an extension, the place you accept requests is this same package with anonymous callers on:
+
+```ts
+installChangeRequests(server, {
+  appName: "Example extension maintainers",
+  extensionId: "com.example/change-requests",
+  getPrincipal: () => null, // every relaying server is an anonymous caller
+  anonymous: true,
+  anonymousDailyCap: 200,
+});
+```
+
+Serve it over Streamable HTTP and name its URL in your extension's specification. Triage with `service.listAll()` and `service.transition()`; relaying servers pick up each answer by ticket. To work from an issue tracker instead, mirror requests into it on your side: attach an `UpstreamRelay` to the endpoint's own service with a `GitHubIssueSink` (`repo` and a token only you hold) under your extension's identifier. Each request becomes an issue, and closing the issue answers the request. Any `UpstreamSink` can do the same for another tracker.
 
 ## Store conformance
 

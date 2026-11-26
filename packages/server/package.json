@@ -25,6 +25,10 @@
       "types": "./dist/middleware.d.ts",
       "import": "./dist/middleware.js"
     },
+    "./endpoint": {
+      "types": "./dist/endpoint.d.ts",
+      "import": "./dist/endpoint.js"
+    },
     "./sqlite": {
       "types": "./dist/sqlite.d.ts",
       "import": "./dist/sqlite.js"

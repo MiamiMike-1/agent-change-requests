@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**SEP**
+
+- Section 3: the place an extension's maintainers accept relayed requests is now a maintainers' endpoint, an MCP server that implements this extension with `anonymous` on. A server relays as an anonymous caller and reads the answer by ticket, so relaying needs no account or credential. The Preamble, Rationale, Security Implications, and Open Questions follow.
+
+**Server package**
+
+- New `ChangeRequestsEndpointSink`, and `endpointCaller` in `@agent-change-requests/server/endpoint`: relay to a maintainers' endpoint over Streamable HTTP with no credential. `GitHubIssueSink` stays, for maintainers who mirror requests into their own tracker.
+
 ## Requests about an extension itself (November 25, 2026)
 
 Shipped in server 0.4.0 and client 0.3.0, with the changes feed below.

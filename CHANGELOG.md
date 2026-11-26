@@ -1,18 +1,21 @@
 # Changelog
 
-## Unreleased
+## Requests about an extension itself (November 25, 2026)
+
+Shipped in server 0.4.0 and client 0.3.0, with the changes feed below.
 
 **SEP**
 
-- Section 3: a new target type, `extension`, for requests about an extension itself, with an optional `component`. Servers must accept these, should relay them to the extension's maintainers without requester identity or task context, and should carry the answer back through the inbox. Rationale and Security Implications explain the relay.
+- Section 3: a new target type, `extension`, for requests about an extension itself, with an optional `component`. Servers must accept these, should relay them to the extension's maintainers without requester identity or task context, and should carry the answer back through the inbox. An extension says where its maintainers accept relayed requests, and servers relay only there. Rationale and Security Implications explain the relay.
+- Preamble: a new row names where requests about this extension go.
 
-**Server package**
+**Server package 0.4.0**
 
 - `target.type` accepts `extension`, with `target.component`. A request that targets the change requests extension under any vendor prefix is marked `about: "spec"`.
 - New `UpstreamRelay` and `GitHubIssueSink`: forward requests about any extension to the tracker its maintainers name, one sink per extension identifier, and sync each issue's state back as `shipped` or `declined`.
 - `ChangeRequestService` gains `setUpstream()` and `recordOf()` for the builder side.
 
-**Client package**
+**Client package 0.3.0**
 
 - `Target` accepts `extension` and `component`. `component` is redacted like `name`, and the open-request check compares it.
 
@@ -40,6 +43,8 @@ The last two protocol pieces the SEP's Reference Implementation section listed a
 - The release script publishes the 1.1.0 fix to the changes feed, and session 2 finds it there with its own request id.
 
 ## Client 0.2.0 (November 25, 2026)
+
+Tagged but never published to npm: the release workflow's old token was refused. These changes first reached npm in client 0.3.0.
 
 - The client now carries the update notice for hosts that show the model a tool's `structuredContent` in place of its text, as SEP section 7 asks. `inspect()` returns `notice` and `modelContent`, and the new `noticeLine()` and `modelContent()` work without reading the inbox. The line is the server's own when present, or one built from the `_meta` count that names an inbox tool the model can call (`inboxToolName`, or the server's `change_requests_list`). It is withheld without consent or in an ephemeral session.
 - New export `updateNoticeLine(count, tool)`.

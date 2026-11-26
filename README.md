@@ -23,6 +23,11 @@ Several vendors have started fixing this on their own by adding a feedback tool 
 4. **Answer back.** Requests are tied to the authenticated principal, not the session, so any later session can pick up the outcome from its inbox. While an update is waiting, every tool result sent to that principal says so, in `_meta` and in one plain line of text, whatever the client supports. The notice is a count with no request content, and it never goes to anonymous callers or to a credential known to be shared by unrelated users. Servers that support [MCP Events (SEP-3415)](https://modelcontextprotocol.io/seps/3415-events-extension) can also push status changes as a `changeRequest.updated` event. The draft defines no delivery mechanism of its own.
 5. **Confirmation.** The agent that asked re-runs its test and reports whether the fix worked. A server's `shipped` is a claim. The requester's confirmation is the evidence.
 
+Two more paths sit alongside the loop:
+
+- **What's new.** A server keeps a feed of everything it ships, whoever asked for it, and flags breaking changes and deprecations to the callers they affect.
+- **One level up.** An agent can file a request about an extension itself, such as this one, instead of about the server's tools. The server passes it on to the extension's maintainers, without the requester's identity or task context, and relays their answer back through the same inbox. No central service is involved: each extension names where its maintainers accept requests.
+
 The extension is opt-in on both sides and adds nothing to the core protocol. How a vendor builds, prioritizes, or ships a change is out of scope.
 
 The draft is written as an MCP extension (proposed identifier `io.modelcontextprotocol/change-requests`, with methods under `changeRequests/`) because MCP gives agents and servers a shared place to negotiate it. The same request, lifecycle, and confirmation model applies to plain HTTP APIs.
@@ -84,8 +89,8 @@ The design also borrows from issue trackers (request and status model), payment 
 |---|---|
 | [SEP-0000-agent-change-requests.md](SEP-0000-agent-change-requests.md) | The full draft: specification, rationale, security, and open questions |
 | [scorecard.md](scorecard.md) | The live ledger from the Tasker test |
-| [packages/server](packages/server) | The server side for the TypeScript MCP SDK: the `changeRequests/*` methods as middleware, a SQLite store, request rules, lifecycle, inbox, update notice, status events, confirmation, scorecard, and MCP tools |
-| [packages/client](packages/client) | The client side for the TypeScript MCP SDK: consent, the model-facing submission tool, redaction, the inbox, and re-running acceptance tests to confirm |
+| [packages/server](packages/server) | The server side for the TypeScript MCP SDK: the `changeRequests/*` methods as middleware, a SQLite store, request rules, lifecycle, inbox, update notice, status events, confirmation, the changes feed, anonymous tickets, the relay to an extension's maintainers, scorecard, and MCP tools |
+| [packages/client](packages/client) | The client side for the TypeScript MCP SDK: consent, the model-facing submission tool, redaction, the inbox and its notice, the changes feed, and re-running acceptance tests to confirm |
 | [packages/demo](packages/demo) | A demo server with one deliberate gap, and a run of the whole loop from the gap to a confirmed shipped change |
 
 ## Next steps

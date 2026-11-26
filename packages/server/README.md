@@ -14,6 +14,7 @@ It handles the parts every server needs the same way:
 - **Update notice:** a count in `_meta` and one plain line of text on every tool result while an update is unread.
 - **What's new:** a version-keyed changes feed (SEP section 12) of everything the server ships, whoever asked for it, with a notice for unread breaking changes and deprecations that each caller can turn off.
 - **Anonymous callers (opt in):** requests without a signed-in principal, each answered with a ticket that reads that one request.
+- **Requests one level up (opt in):** requests about an extension itself, relayed to the tracker its maintainers name, with the answer synced back to the requester.
 - **Confirmation:** the requester's own verdict on a shipped change, kept separately from the server's claim, plus whether it adopted the change.
 - **Scorecard:** each request's stages and times, and the running numbers (time to live, build time, human time, confirmed fix rate, adoption, gaps).
 - **Health check:** a route that needs no credential and says whether the server can reach its store, without returning any data.
@@ -159,7 +160,7 @@ Every request carries `about`: `app` for the server's own tools, or `spec` for t
 
 Because every server that uses this package computes the same scorecard and the same tag, their numbers line up. A periodic job can read each server's `change_requests_scorecard` and `change_requests_list` with `about: "spec"`, and draft one cross-server report for the spec's maintainers: the numbers per server and the lessons about the standard, written without any server's data.
 
-### Relaying requests to the spec's maintainers
+### Relaying requests to an extension's maintainers
 
 An agent can also file a request about the extension itself with `target: { type: "extension", name: "<extension id>", component: "spec" | "server-sdk" | "client-sdk" }`. Those are marked `spec` too. The same target works for any extension the server implements. To send them one level up, attach an `UpstreamRelay`:
 

@@ -447,7 +447,7 @@ The extension process requires at least one reference implementation in an offic
 
 **What exists today.** The plan has three parts, and each now has a working prototype (MIT):
 
-1. **Server middleware.** [`@agent-change-requests/server`](packages/server) 0.5.0. One call, `installChangeRequests(server, options)`, adds the extension to any `McpServer`:
+1. **Server middleware.** [`@agent-change-requests/server`](packages/server) 0.5.1. One call, `installChangeRequests(server, options)`, adds the extension to any `McpServer`:
    - It advertises the Section 1 settings object under `capabilities.extensions`, in the `initialize` result, because SDK 1.x has no `server/discover` yet.
    - It answers `changeRequests/submit`, `/get`, `/list`, `/withdraw`, `/confirm`, and `/changes`, with the error reasons in Section 10.
    - It stores requests in SQLite, with idempotency keys and a daily cap per principal. A Postgres store, a store interface, and a conformance suite cover other databases.

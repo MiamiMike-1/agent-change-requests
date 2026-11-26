@@ -64,6 +64,20 @@ describe("changeRequestsFetchHandler", () => {
     }
   });
 
+  it("answers GET and DELETE with 405, without opening a stream or counting the call", async () => {
+    let checked = 0;
+    const { handler } = endpoint({ allow: () => ((checked += 1), true) });
+    for (const method of ["GET", "DELETE"]) {
+      const response = await handler(
+        new Request("https://maintainers.example.com/mcp", { method, headers: { accept: "text/event-stream" } }),
+      );
+      expect(response.status).toBe(405);
+      expect(response.headers.get("allow")).toBe("POST");
+      expect((await response.json()).error.message).toBe("Method not allowed.");
+    }
+    expect(checked).toBe(0);
+  });
+
   it("refuses oversized bodies and callers over the limit", async () => {
     const { handler } = endpoint({ maxBodyBytes: 200, allow: rateLimiter({ limit: 2, now: () => 0 }) });
     const ping = { jsonrpc: "2.0", id: 1, method: "ping" };

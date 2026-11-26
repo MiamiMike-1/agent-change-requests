@@ -3,6 +3,7 @@
  * It runs wherever fetch handlers do, such as Deno, Supabase Edge Functions,
  * Cloudflare Workers, Bun, and Node 18 or later, with no process to keep alive.
  * Each request gets its own server and a stateless transport, so all state is in the store.
+ * It answers POST only: GET and DELETE get 405.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -27,10 +28,10 @@ export interface ChangeRequestsFetchOptions extends Omit<ChangeRequestsOptions, 
   allow?: (request: Request) => boolean | Promise<boolean>;
 }
 
-function refuse(status: number, message: string): Response {
+function refuse(status: number, message: string, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message }, id: null }), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
   });
 }
 
@@ -83,15 +84,16 @@ export function changeRequestsFetchHandler(options: ChangeRequestsFetchOptions):
   const service = new ChangeRequestService({ ...rest, store, currentVersion: rest.currentVersion ?? info.version });
 
   const handler = async (incoming: Request): Promise<Response> => {
+    // Nothing is kept between requests, so there is no event stream to open with GET and
+    // no session to end with DELETE. A GET stream would also never finish, which hangs
+    // hosts that wait for the whole response.
+    if (incoming.method !== "POST") return refuse(405, "Method not allowed.", { allow: "POST" });
     if (allow && !(await allow(incoming))) return refuse(429, "Too many requests. Try again later.");
-    let request = incoming;
-    if (incoming.method === "POST") {
-      const declared = Number(incoming.headers.get("content-length") ?? 0);
-      if (declared > maxBodyBytes) return refuse(413, "Request body too large.");
-      const body = await incoming.arrayBuffer();
-      if (body.byteLength > maxBodyBytes) return refuse(413, "Request body too large.");
-      request = new Request(incoming.url, { method: "POST", headers: incoming.headers, body });
-    }
+    const declared = Number(incoming.headers.get("content-length") ?? 0);
+    if (declared > maxBodyBytes) return refuse(413, "Request body too large.");
+    const body = await incoming.arrayBuffer();
+    if (body.byteLength > maxBodyBytes) return refuse(413, "Request body too large.");
+    const request = new Request(incoming.url, { method: "POST", headers: incoming.headers, body });
     const server = new McpServer(info);
     const installed = installChangeRequests(server, { ...rest, service });
     configure?.(server, installed);

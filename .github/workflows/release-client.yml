@@ -1,9 +1,9 @@
 # Publishes @agent-change-requests/client to npm when a tag like client-v0.1.0 is pushed,
 # or when a GitHub Release is published with a new tag of that form (which creates the tag).
-# Publishing uses npm trusted publishing (OIDC) once it is set up for the package on
-# npmjs.com. Until then, for the very first release, a repository secret NPM_TOKEN
-# holding a short-lived npm granular access token is used. Delete that secret once
-# trusted publishing is on.
+# Publishing uses npm trusted publishing (OIDC) only. No npm token is passed: when
+# NODE_AUTH_TOKEN is set, npm publishes with that token instead of OIDC, and a package
+# that requires 2FA refuses it (E403). Trusted publishing must be set up for the package
+# on npmjs.com, with this repository and this workflow file.
 name: Release client package
 
 on:
@@ -13,7 +13,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
+  id-token: write # npm trusted publishing and provenance
 
 jobs:
   publish:
@@ -40,5 +40,3 @@ jobs:
       - run: npm test --workspace packages/client
       - run: npm run build --workspace packages/client
       - run: npm publish --workspace packages/client --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

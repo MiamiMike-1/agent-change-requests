@@ -1,5 +1,10 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
-import { GitHubIssueSink, issueBody, UpstreamRelay, type UpstreamRequest, type UpstreamSink, type UpstreamState } from "../src/upstream.js";
+import { installChangeRequests } from "../src/middleware.js";
+import { ChangeRequestsEndpointSink, GitHubIssueSink, issueBody, UpstreamRelay, type UpstreamRequest, type UpstreamSink, type UpstreamState } from "../src/upstream.js";
 import { makeService, request } from "./helpers.js";
 
 class FakeSink implements UpstreamSink {
@@ -106,6 +111,31 @@ describe("UpstreamRelay", () => {
     expect((await withId.forward(requestId))?.extension).toBe(EXT);
   });
 
+  it("forwards what was missed once the sink is back", async () => {
+    const { service } = makeService();
+    const sink = new FakeSink();
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: sink } });
+    relay.attach();
+    sink.fail = true;
+    const a = await service.submit("user_a", specRequest({ title: "One" }));
+    const b = await service.submit("user_a", specRequest({ title: "Two" }));
+    await service.submit("user_a", request());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await relay.forwardPending()).toEqual([]);
+    sink.fail = false;
+    expect((await relay.forwardPending()).sort()).toEqual([a.requestId, b.requestId].sort());
+    expect(await relay.forwardPending()).toEqual([]);
+    expect(sink.forwarded).toHaveLength(2);
+  });
+
+  it("sends a request about the extension under another vendor prefix to extensionId's sink", async () => {
+    const { service } = makeService();
+    const sink = new FakeSink();
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: sink }, extensionId: EXT });
+    const { requestId } = await service.submit("user_a", specRequest({ target: { type: "extension", name: "com.other/change-requests" } }));
+    expect((await relay.forward(requestId))?.extension).toBe(EXT);
+  });
+
   it("does not forward requests about the app", async () => {
     const { service } = makeService();
     const sink = new FakeSink();
@@ -200,5 +230,76 @@ describe("GitHubIssueSink", () => {
     });
     expect(body).toContain("> cc @​maintainers\n> second");
     expect(body).toContain("`extension / com.example/change-requests / client-sdk`");
+  });
+});
+
+describe("ChangeRequestsEndpointSink", () => {
+  /** The maintainers' side: a server that speaks the extension and accepts anonymous callers. */
+  async function maintainers(anonymous = true) {
+    const server = new McpServer({ name: "maintainers", version: "1.0.0" });
+    const installed = installChangeRequests(server, {
+      appName: "Maintainers",
+      extensionId: EXT,
+      getPrincipal: () => null,
+      anonymous,
+    });
+    const client = new Client({ name: "relay", version: "1.0.0" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const call = (method: string, params: Record<string, unknown>) =>
+      client.request({ method, params } as never, ResultSchema) as Promise<Record<string, unknown>>;
+    return { upstream: installed.service, call };
+  }
+
+  it("relays with no credential and carries the maintainers' answer back", async () => {
+    const { upstream, call } = await maintainers();
+    const { service } = makeService();
+    const relay = new UpstreamRelay({ service, sinks: { [EXT]: new ChangeRequestsEndpointSink({ call }) }, serverName: "Example" });
+    const a = await service.submit("user_a", specRequest({ title: "One" }));
+    const b = await service.submit("user_a", specRequest({ title: "Two" }));
+    await relay.forward(a.requestId);
+    await relay.forward(b.requestId);
+
+    const received = (await upstream.listAll()).items;
+    expect(received.map((r) => r.title).sort()).toEqual(["One", "Two"]);
+    expect(received.every((r) => r.anonymous && !r.context)).toBe(true);
+    expect(JSON.stringify(received)).not.toContain("user_a");
+
+    // The requester sees that it was relayed, but never the ticket.
+    const relayed = await service.get("user_a", a.requestId);
+    expect(relayed.status).toBe("triaged");
+    const ticket = received[0]!.ticket!;
+    expect(JSON.stringify(relayed)).not.toContain(ticket);
+
+    const one = received.find((r) => r.title === "One")!;
+    const two = received.find((r) => r.title === "Two")!;
+    await upstream.transition(one.requestId, {
+      status: "shipped",
+      resolution: { availability: "all", changelogUri: "https://example.com/changes#1" },
+    });
+    await upstream.transition(two.requestId, { status: "declined", message: "Out of scope for version 1." });
+    expect(await relay.sync()).toEqual({ checked: 2, shipped: [a.requestId], declined: [b.requestId] });
+    expect((await service.get("user_a", a.requestId)).resolution).toEqual({
+      availability: "all",
+      changelogUri: "https://example.com/changes#1",
+    });
+    expect((await service.get("user_a", b.requestId)).message).toContain("Out of scope for version 1.");
+  });
+
+  it("files once when a forward is retried", async () => {
+    const { upstream, call } = await maintainers();
+    const sink = new ChangeRequestsEndpointSink({ call });
+    const req = { requestId: "crq_1", kind: "bug" as const, title: "t", description: "d", submittedAt: "2026-01-01T00:00:00Z" };
+    const first = await sink.forward(req);
+    expect(await sink.forward(req)).toEqual(first);
+    expect((await upstream.listAll()).items).toHaveLength(1);
+  });
+
+  it("fails clearly when the endpoint does not accept anonymous callers", async () => {
+    const { call } = await maintainers(false);
+    const sink = new ChangeRequestsEndpointSink({ call });
+    await expect(
+      sink.forward({ requestId: "crq_1", kind: "bug", title: "t", description: "d", submittedAt: "2026-01-01T00:00:00Z" }),
+    ).rejects.toThrow();
   });
 });

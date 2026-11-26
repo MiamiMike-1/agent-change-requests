@@ -50,8 +50,9 @@ export interface UpstreamRelayOptions {
   sinks: Record<string, UpstreamSink>;
   /**
    * The identifier this server uses for the change requests extension. When set, a
-   * request marked about "spec" that does not use an extension target (for example one
-   * that targets a change_requests tool) goes to that extension's sink.
+   * request marked about "spec" goes to that extension's sink even when it names no
+   * extension target (for example one that targets a change_requests tool), or names
+   * the change requests extension under another vendor's prefix.
    */
   extensionId?: string;
   /** Shown to maintainers as the relaying server. */
@@ -180,6 +181,34 @@ export class UpstreamRelay {
     return report;
   }
 
+  /**
+   * Forwards every open request that should have been relayed and was not, for example
+   * because the sink was down or a cap was reached. Run it with sync(). It stops at the
+   * first failure, so a cap that is still in force is not hit again and again.
+   */
+  async forwardPending(): Promise<string[]> {
+    const pending: ChangeRequestRecord[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.service.listAll(cursor ? { cursor } : {});
+      for (const r of page.items) {
+        const extension = this.extensionFor(r);
+        if (!r.upstream && !isTerminal(r.status) && extension !== undefined && this.sinks[extension]) pending.push(r);
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    const forwarded: string[] = [];
+    for (const record of pending.reverse()) {
+      try {
+        if (await this.forward(record.requestId)) forwarded.push(record.requestId);
+      } catch (error) {
+        this.onError(error, record.requestId);
+        break;
+      }
+    }
+    return forwarded;
+  }
+
   private async forwardOnce(requestId: string): Promise<UpstreamLink | null> {
     const record = await this.service.recordOf(requestId);
     if (record.upstream) return record.upstream;
@@ -217,9 +246,82 @@ export class UpstreamRelay {
 
   /** The extension a request is about, if any. */
   private extensionFor(record: ChangeRequestRecord): string | undefined {
-    if (record.target?.type === "extension") return record.target.name;
+    const named = record.target?.type === "extension" ? record.target.name : undefined;
+    if (named !== undefined && this.sinks[named]) return named;
+    // The change requests extension has a different vendor prefix on every server until
+    // its identifier is approved, so a request about it may name a prefix with no sink.
     if (record.about === "spec") return this.extensionId;
-    return undefined;
+    return named;
+  }
+}
+
+// ---- Change requests endpoint sink ---------------------------------------
+
+/**
+ * Sends one MCP request to the maintainers' endpoint and returns its result.
+ * endpointCaller in "./endpoint" builds one from a URL.
+ */
+export type UpstreamCall = (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+export interface ChangeRequestsEndpointSinkOptions {
+  /** Reaches the endpoint the extension's maintainers named for relayed requests. */
+  call: UpstreamCall;
+}
+
+/**
+ * Relays to an endpoint that itself speaks this extension and accepts anonymous
+ * callers (SEP section 3). The relaying server needs no account or credential there:
+ * it submits anonymously, keeps the ticket, and reads the answer with it.
+ */
+export class ChangeRequestsEndpointSink implements UpstreamSink {
+  private readonly call: UpstreamCall;
+
+  constructor(options: ChangeRequestsEndpointSinkOptions) {
+    if (typeof options?.call !== "function") throw new Error("ChangeRequestsEndpointSink needs a call function.");
+    this.call = options.call;
+  }
+
+  async forward(request: UpstreamRequest): Promise<{ ref: string; url?: string }> {
+    const params: Record<string, unknown> = {
+      kind: request.kind,
+      title: request.title,
+      description: request.description,
+      // The same request always carries the same key, so a retried forward files once.
+      idempotencyKey: `relay:${request.server ?? ""}:${request.requestId}:${request.submittedAt}`.slice(0, 200),
+    };
+    if (request.target) params.target = request.target;
+    if (request.failureMode !== undefined) params.failureMode = request.failureMode;
+    if (request.impact) params.impact = request.impact;
+    const result = await this.call("changeRequests/submit", params);
+    const { requestId, ticket } = result;
+    if (typeof requestId !== "string" || typeof ticket !== "string" || /\s/.test(requestId)) {
+      throw new Error("The endpoint returned no ticket. It must accept anonymous callers.");
+    }
+    // The ticket is a credential. The ref stays on the stored record, which callers never see.
+    return { ref: `${requestId} ${ticket}` };
+  }
+
+  async poll(ref: string): Promise<UpstreamState> {
+    const space = ref.indexOf(" ");
+    if (space <= 0) throw new Error("Not an endpoint ref.");
+    const status = await this.call("changeRequests/get", { requestId: ref.slice(0, space), ticket: ref.slice(space + 1) });
+    const message = typeof status.message === "string" ? status.message : undefined;
+    switch (status.status) {
+      case "shipped": {
+        const shipped: UpstreamState = { state: "shipped" };
+        const uri = (status.resolution as { changelogUri?: unknown } | undefined)?.changelogUri;
+        if (typeof uri === "string") shipped.url = uri;
+        return shipped;
+      }
+      case "declined":
+        return { state: "declined", reason: message ?? "no reason given" };
+      case "duplicate":
+        return { state: "declined", reason: "it duplicates a request the maintainers already have" };
+      case "withdrawn":
+        return { state: "declined", reason: "it was withdrawn" };
+      default:
+        return { state: "open" };
+    }
   }
 }
 

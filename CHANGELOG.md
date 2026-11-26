@@ -1,5 +1,18 @@
 # Changelog
 
+## Maintainers' endpoint (November 26, 2026)
+
+**SEP**
+
+- Section 3: the place an extension's maintainers accept relayed requests is now a maintainers' endpoint, an MCP server that implements this extension with `anonymous` on. A server relays as an anonymous caller and reads the answer by ticket, so relaying needs no account or credential. The Preamble, Rationale, Security Implications, and Open Questions follow.
+
+**Server package 0.5.0**
+
+- New `ChangeRequestsEndpointSink`, and `endpointCaller` in `@agent-change-requests/server/endpoint`: relay to a maintainers' endpoint over Streamable HTTP with no credential. `GitHubIssueSink` stays, for maintainers who mirror requests into their own tracker.
+- New `PostgresStore` in `@agent-change-requests/server/postgres`, for the tables in `migrations/postgres.sql` (Supabase included). It takes a query function, so it works with any driver, and passes both conformance suites against a real Postgres.
+- New `changeRequestsFetchHandler` in `@agent-change-requests/server/fetch`: the whole extension as one `(Request) => Promise<Response>` function for Deno, Supabase Edge Functions, Workers, Bun, or Node. It is stateless, takes a body size limit and an `allow` hook, and ships a simple `rateLimiter`.
+- `UpstreamRelay.forwardPending()` retries requests that could not be relayed, for example when the sink was down or a cap was reached.
+
 ## Requests about an extension itself (November 25, 2026)
 
 Shipped in server 0.4.0 and client 0.3.0, with the changes feed below.

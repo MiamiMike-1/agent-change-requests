@@ -38,6 +38,7 @@ export {
 export {
   UpstreamRelay,
   GitHubIssueSink,
+  ChangeRequestsEndpointSink,
   issueBody,
   upstreamRequest,
   type UpstreamSink,
@@ -45,5 +46,7 @@ export {
   type UpstreamState,
   type UpstreamRelayOptions,
   type GitHubIssueSinkOptions,
+  type ChangeRequestsEndpointSinkOptions,
+  type UpstreamCall,
   type SyncReport,
 } from "./upstream.js";

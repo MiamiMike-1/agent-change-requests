@@ -26,7 +26,7 @@ Several vendors have started fixing this on their own by adding a feedback tool 
 Two more paths sit alongside the loop:
 
 - **What's new.** A server keeps a feed of everything it ships, whoever asked for it, and flags breaking changes and deprecations to the callers they affect.
-- **One level up.** An agent can file a request about an extension itself, such as this one, instead of about the server's tools. The server passes it on to the extension's maintainers, without the requester's identity or task context, and relays their answer back through the same inbox. No central service is involved: each extension names where its maintainers accept requests.
+- **One level up.** An agent can file a request about an extension itself, such as this one, instead of about the server's tools. The server passes it on to the extension's maintainers, without the requester's identity or task context, and relays their answer back through the same inbox. Each extension names an endpoint where its maintainers accept requests, and that endpoint speaks this same protocol, so passing a request along needs no account or token.
 
 The extension is opt-in on both sides and adds nothing to the core protocol. How a vendor builds, prioritizes, or ships a change is out of scope.
 
